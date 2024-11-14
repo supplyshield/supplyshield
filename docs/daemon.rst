@@ -19,29 +19,35 @@ as Wasp. A wasp contract requires the following fields:
 
 .. code-block:: javascript
 
-    {
-        "repository": {
-            "url": URL,
-            "commit": COMMIT_ID,
-            "tag": TAG,
-            "commit_author": COMMIT_AUTHOR (To be implemented later)
-        },
-        "aws_environment": stage/papg/prod,
-        "job_url": jenkins_url,
-        "buildx_enabled": true/false
-        "ecr_image": [{
-            "name": <URI upto tag part (ie : )>,
-            "digest": DIGEST,
-            "type": "Image" or "ImageIndex",
-            "platform": <Only present for Image>
-        }...]
-    }
+   {
+      "repository": {
+         "url": "git@github.com:org-name/repository.git",
+         "commit": "commit_hash",
+         "tag": "tag"
+      },
+      "job_url": "https://jenkins/job/project/",
+      "aws_environment": "stage/prod",
+      "buildx_enabled": "1/0",
+      "ecr_image": [
+         {
+            "name": "account-id.dkr.ecr.ap-south-1.amazonaws.com/name",
+            "digest": "sha256:digest",
+            "type": "Image",
+            "platform": {
+                "architecture": "amd64",
+                "os": "linux"
+            }
+         }
+      ],
+      "type": "Bridge",
+      "timestamp": "2024-09-20-03:45:42"
+   }
 
 The above contract supports builds with multi-arch images on AWS ECR.
 
 .. image:: images/daemon-explained.svg
    :width: 600
-   :alt: daemon flow explained
+   :alt: Daemon flow explained
 
 
 ScanCode.io
