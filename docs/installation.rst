@@ -7,38 +7,48 @@ Run with Docker
 Get Docker
 ^^^^^^^^^^
 
-The first step is to download and install Docker on your platform. 
-Refer to Docker documentation and chose the best installation for your system.
+SupplyShield can be installed using Docker Compose. The following steps will guide you through the installation process:
 
-Build the image
-^^^^^^^^^^^^^^^
+Install Docker
+^^^^^^^^^^^^^^
 
-SupplyShield is distributed with ``Dockerfile`` and ``docker-compose.yml`` files
-required for the deploying the application.
+First, you need to have Docker installed on your machine. If you haven't installed Docker yet, you can download it from the official Docker website at https://www.docker.com/get-started and follow the instructions for your operating system.
 
-.. code-block:: bash
-    git clone https://github.com/supplyshield/supplyshield
-    cd supplyshield
-    docker compose build
-
-Configuration
-^^^^^^^^^^^^^
-
-SupplyShield requires a configuration file to run. Configuration file can be created by modifying the ``docker.env`` file. 
-Refer to the ``docker.env`` file for the configuration options.
-
-SupplyShield consumes messages from an AWS SQS queue. The queue URL, AWS credentials and region need to be configured in
-the ``docker.env`` file. Your organization's CI/CD pipeline should be configured to send messages to this SQS queue. 
-The messages should be in the format specified in the `Wasp <wasp_>`_.
-
-Run the application
+Get the Source Code
 ^^^^^^^^^^^^^^^^^^^
 
-Once the image is built, it needs to be configured to run the application. 
-You can run the application using the following command:
+Clone the repository and navigate to the project directory:
 
-.. code-block:: bash
-    docker compose up
+   .. code-block:: bash
+
+      git clone 
+      cd supplyshield
+
+Configure the Environment Variables
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Copy `docker.env.sample` to `docker.env` and update the environment variables to match your configuration. The configuration file contains few mandatory variables that need to be set before starting the application.
+
+   .. code-block:: bash
+         
+         cp docker.env.sample docker.env
+   
+Run the docker
+^^^^^^^^^^^^^^
+
+Run the following command to start the application:
+
+   .. code-block:: bash
+
+      docker compose up
+
+This will start the SupplyShield application and required services. SupplyShield will now start listening to the configured SQS queue for messages and process them. 
+
+Send a message to the SQS queue
+^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+
+Sending a message to the SQS queue will trigger the SupplyShield pipeline to start processing the message. The pipeline will generate an SBOM, scan the dependencies, and identify vulnerabilities. 
+Format of the message is as described in the wasp section.
 
 At this point, SupplyShield would have started and would be listening for scan requests. 
 
