@@ -2,6 +2,10 @@
 SupplyShield
 ===============
 
+.. image:: https://github.com/supplyshield/supplyshield/blob/develop/docs/images/logo.png
+   :alt: SupplyShield Logo
+   :align: center
+
 SupplyShield is an open-source application security orchestration framework designed to secure your software supply chain from vulnerabilities, malicious dependencies, and unapproved base images. It provides a comprehensive solution to automate the detection, prioritization, and resolution of security issues in your open-source dependencies and containerized applications.
 
 |Python 3.10+| |stability-wip|
@@ -64,7 +68,7 @@ This will start the SupplyShield application and required services. SupplyShield
 
 **Step 5: Send a message to the SQS queue**
 
-Sending a message to the SQS queue will trigger the SupplyShield pipeline to start processing the message. The pipeline will generate an SBOM, scan the dependencies, and identify vulnerabilities. Format of the message can be found `here <https://supplyshield.readthedocs.io/en/latest/usage.html#message-format>`_.
+Sending a message to the SQS queue will trigger the SupplyShield pipeline to start processing the message. The pipeline will generate an SBOM, scan the dependencies, and identify vulnerabilities. Format of the message can be found `here <https://supplyshield.readthedocs.io/en/latest/introduction.html#id1>`_.
 
 Architecture Diagram
 ^^^^^^^^^^^^^^^^^^^^
