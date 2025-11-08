@@ -2,142 +2,528 @@
 <html>
 
 <head>
-    <title>Actionable Dashboard</title>
+    <title>Actionable Dashboard v3</title>
     <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css"
         integrity="sha384-T3c6CoIi6uLrA9TneNEoa7RxnatzjcDSCmG1MXxSR1GAsXEV/Dwwykc2MPK8M2HN" crossorigin="anonymous">
+    <link rel="stylesheet" href="{{ url_for('static', filename='actionables-dashboard.css') }}">
 </head>
-<style>
-    .green {
-        background-color: aquamarine;
-    }
-
-    td {
-        width: 100px;
-        white-space: nowrap;
-    }
-
-    td:last-child {
-        display: none;
-    }
-
-    .i_am_vulnerable {
-        background-color: tomato !important;
-    }
-
-    .upgrade_me {
-        background-color: aquamarine !important;
-        ;
-    }
-
-    .navbar-brand {
-        margin-left: 20px;
-    }
-
-    .logo{
-       color: #34a853;
-    }
-</style>
 
 <body>
-    <nav class="navbar navbar-expand-lg navbar-dark bg-dark">
-        <div class="row">
-            <div class="col-md-12">
-                <a class="navbar-brand" href="#"><b class="logo">SupplyShield</b> Actionables Dashboard</a>
+    {% include 'includes/navbar.html' %}
+
+    <div class="page-header">
+        <div class="container-fluid px-4">
+            <h1 class="page-title">Security Actionables Dashboard</h1>
+            <p class="page-subtitle">Priority-based vulnerability management for {{ repository.name }}</p>
+        </div>
+    </div>
+
+    <div class="container-fluid px-4">
+        <div class="alert alert-info" role="alert">
+            <strong>Repository:</strong>
+            <a href="https://{{repository.provider}}/{{ repository.org }}/{{repository.name}}"
+                class="text-decoration-none">{{ repository.name }}</a>
+            <span class="badge bg-primary ms-2">{{selected_env}}</span>
+            {% if repository.pod %}
+            <span class="badge bg-secondary ms-1">{{ repository.pod }}</span>
+            {% endif %}
+            <br>
+            <small class="text-muted mt-1 d-block">
+                Packages listed here introduce vulnerabilities directly or indirectly.
+                Upgrade to suggested versions when available.
+            </small>
+        </div>
+
+        <!-- Commit Details Section -->
+        {% if commit_id and commit_id != "N/A" %}
+        <div class="alert alert-secondary" role="alert">
+            <div class="d-flex justify-content-between align-items-center">
+                <div>
+                    <strong>Build Information:</strong>
+                    <br>
+                    <span class="text-muted">Commit ID: {{ commit_id }}</span>
+                    {% if jenkins_url and jenkins_url != "N/A" %}
+                    <br>
+                    <a href="{{ jenkins_url }}" target="_blank" class="btn btn-sm btn-outline-primary mt-2">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="me-1">
+                            <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                            <polyline points="15,3 21,3 21,9"/>
+                            <line x1="10" y1="14" x2="21" y2="3"/>
+                        </svg>
+                        View Build on Jenkins
+                    </a>
+                    {% endif %}
+                </div>
+                <div class="text-end">
+                    <small class="text-muted">
+                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="me-1">
+                            <circle cx="12" cy="12" r="10"/>
+                            <polyline points="12,6 12,12 16,14"/>
+                        </svg>
+                        {% if build_timestamp %}
+                        Build time: {{ build_timestamp.strftime('%Y-%m-%d %H:%M:%S') }}
+                        {% else %}
+                        Build time: N/A
+                        {% endif %}
+                    </small>
+                </div>
             </div>
         </div>
-        <div class="collapse navbar-collapse" id="navbarNav">
-            <ul class="navbar-nav">
-                <li class="nav-item active">
-                    <a class="nav-link" href="#">Home</a>
-                </li>
-                <li class="nav-item">
-                    <a class="nav-link" href="#">FAQ</a>
-                </li>
-            </ul>
+        {% endif %}
+
+        {% if not suggested_versions %}
+        <div class="no-actionables">
+            <div class="success-icon">✓</div>
+            <h5>No actionable vulnerabilities detected</h5>
+            <p class="text-muted mb-0">
+                This repository appears to be secure. Check back later or review other repositories.
+            </p>
         </div>
-    </nav>
-    <div class="container-fluid">
-        <div class="alert alert-primary mt-3" role="alert">
-            <i>You are currently viewing results for <a href="https://{{repository.provider}}/{{ repository.org }}/{{repository.name}}">{{ repository.name}}</a> on {{selected_env}} environment. (pod: {{repository.pod}})</i>
-        </div>
-        {% if no_actionables %}
-            <div class="card mt-3">
-                <div class="card-header bg-dark text-white">
-                    Thanks for checking!
-                </div>
-                <div class="card-body">
-                        <p>It seems like there are no actionables detected for the selected repository. Please come back later or check other repositories you own.</p>
-                </div>
-            </div>
         {% else %}
-            <div class="card mt-3">
-                <div class="card-header bg-dark text-white">
-                    Which vulnerable package do you want to fix today?
-                </div>
-                <div class="card-body">
-                    <form action="/actionable/fix" method="GET">
-                        <div class="form-group">
-                            <input type="hidden" name="repository_id" value="{{repository.id}}" />
-                            <input type="hidden" name="env" value="{{selected_env}}" />
-                            <select id="vulnerable_package" name="vulnerable_package" class="form-control mt-2">
-                                <option selected value="not-selected">See all</option>
-                                {% for package in vulnerable_packages %}
-                                <option {% if package.id == selected_package %} selected {% endif %} value="{{ package.id }}">{{
-                                    package[1] }}</option>
-                                {% endfor %}
-                            </select>
-                        </div>
-                        <div class="form-group mt-3">
-                            <input type="checkbox" name="show_paths" value="true"> Show paths through which the selected vulnerable package was introduced. Check this only if you need an in-depth understanding.
-                        </div>
-                        <button type="submit" class="btn btn-primary mt-3">See my actionables</button>
-                        <!-- <input type="button" class="btn btn-secondary mt-3" style="cursor:not-allowed;" value="See common library actionables"/> -->
-                    </form>
+
+        <!-- Categorize actionables by priority based on EPSS scores -->
+        {% set p0_items = [] %}
+        {% set p1_items = [] %}
+        {% set p2_items = [] %}
+        {% set p3_items = [] %}
+        
+        {% for actionable in suggested_versions %}
+            {% if actionable['epss_score'] is not none %}
+                {% set epss_score = actionable['epss_score'] %}
+                {% if epss_score > 0.8 %}
+                    {% set _ = p0_items.append(actionable) %}
+                {% elif epss_score > 0.7 %}
+                    {% set _ = p1_items.append(actionable) %}
+                {% elif epss_score > 0.5 %}
+                    {% set _ = p2_items.append(actionable) %}
+                {% else %}
+                    {% set _ = p3_items.append(actionable) %}
+                {% endif %}
+            {% else %}
+                <!-- For v2 route without EPSS, put all items in P3 -->
+                {% set _ = p3_items.append(actionable) %}
+            {% endif %}
+        {% endfor %}
+
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h4>Priority Dashboard ({{ suggested_versions | length }} total)</h4>
+            <button class="btn download-btn" id="downloadBtn">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                    <polyline points="7,10 12,15 17,10"/>
+                    <line x1="12" y1="15" x2="12" y2="3"/>
+                </svg>
+                Download Report
+            </button>
+        </div>
+
+        <!-- Priority Statistics -->
+        <div class="row mb-4">
+            <div class="col-md-3">
+                <div class="stats-card">
+                    <div class="stats-label" style="color: #d63384;">P0 - Critical</div>
+                    <div class="stats-number" style="color: #d63384;">{{ p0_items | length }}</div>
+                    <div class="stats-description">{% if include_epss %}EPSS > 0.8{% else %}N/A{% endif %}</div>
                 </div>
             </div>
-            {% if actionables %}
-                <h3 class="mt-3">Your actionables ({{ actionables | length }}):</h3>
-                <div class="alert alert-warning" role="alert">
-                    <p>Upgrade the following to latest version: </p>
-                    <ol>
-                        {% for actionable in actionables %}
-                        <li> {{ actionable }}</li>
-                        {% endfor %}
-                    </ol>
+            <div class="col-md-3">
+                <div class="stats-card">
+                    <div class="stats-label" style="color: #fd7e14;">P1 - High</div>
+                    <div class="stats-number" style="color: #fd7e14;">{{ p1_items | length }}</div>
+                    <div class="stats-description">{% if include_epss %}EPSS > 0.7{% else %}N/A{% endif %}</div>
                 </div>
-            {% endif %}
-            {% if non_commons_paths %}
-                <hr />
-                <h3>Paths ({{ non_commons_paths | length }})</h3>
-                <br />
-                {% if selected_package_purl %}
-                    <div class="alert alert-info" role="alert">
-                        <ul>
-                            <li>The following section denotes different paths in which <code>{{ selected_package_purl[1] }}</code> is being imported and used.</li>
-                            <li>Your action item is to upgrade all the first level packages that caused import of
-                                <code>{{ selected_package_purl[1] }}</code>.
-                            </li>
-                        </ul>
-                    </div>
-                    <table class="table  table-hover">
-                        {% for path in non_commons_paths %}
-                        <tr>
-                            {% for purl in path %}
-                                {% if purl == selected_package_purl[1] %}
-                                    <td class="i_am_vulnerable">{{ purl }}</td>
-                                {% elif purl in list_of_actionables %}
-                                    <td class="upgrade_me">{{ purl }}</td>
-                                {% else %}
-                                    <td>{{ purl }}</td>
-                                {% endif %}
-                                    <td> > </td>
-                            {% endfor %}
-                        </tr>
-                        {% endfor %}
-                    </table>
-                {% endif %}
-            {% endif %}
+            </div>
+            <div class="col-md-3">
+                <div class="stats-card">
+                    <div class="stats-label" style="color: #f08c00;">P2 - Medium</div>
+                    <div class="stats-number" style="color: #f08c00;">{{ p2_items | length }}</div>
+                    <div class="stats-description">{% if include_epss %}EPSS > 0.5{% else %}N/A{% endif %}</div>
+                </div>
+            </div>
+            <div class="col-md-3">
+                <div class="stats-card">
+                    <div class="stats-label" style="color: #198754;">P3 - Low</div>
+                    <div class="stats-number" style="color: #198754;">{{ p3_items | length }}</div>
+                    <div class="stats-description">{% if include_epss %}EPSS ≤ 0.5{% else %}All items{% endif %}</div>
+                </div>
+            </div>
+        </div>
+
+        <!-- P0 - Critical Priority -->
+        {% if p0_items | length > 0 %}
+        <div class="priority-section">
+            <div class="priority-header p0">
+                <span>P0 - Critical Priority</span>
+                <span>{{ p0_items | length }} items{% if include_epss %} - EPSS > 0.8{% endif %}</span>
+            </div>
+            <table class="table priority-table" id="p0-actionables">
+                <thead>
+                    <tr>
+                        <th width="3%">#</th>
+                        <th width="8%">Type</th>
+                        <th width="25%">Namespace</th>
+                        <th width="20%">Package Name</th>
+                        <th width="10%">Version</th>
+                        <th width="10%">Exploitability</th>
+                        <th width="16%">Status</th>
+                        <th width="8%">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for actionable in p0_items %}
+                    <tr>
+                        <td>{{ loop.index }}</td>
+                        <td>
+                            {% if actionable['package_type'] %}
+                            <span class="package-type">{{ actionable['package_type'] }}</span>
+                            {% else %}
+                            <span class="package-type">unknown</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if actionable['package_namespace'] %}
+                            <span class="package-namespace">{{ actionable['package_namespace'] }}</span>
+                            {% else %}
+                            <span class="package-namespace">N/A</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if actionable['package_name'] %}
+                            <a href="/actionable/v3/package-details?package_url={{ actionable['full_package_url'] | urlencode }}&version={{ actionable['current_version'] | urlencode }}" class="package-name-link">
+                                <span class="package-name">{{ actionable['package_name'] }}</span>
+                            </a>
+                            {% else %}
+                            <a href="/actionable/v3/package-details?package_url={{ actionable['full_package_url'] | urlencode }}&version={{ actionable['current_version'] | urlencode }}" class="package-name-link">
+                                <span class="package-name">{{ actionable['full_package_url'] }}</span>
+                            </a>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <span class="version-badge">{{ actionable['current_version'] }}</span>
+                        </td>
+                        <td>
+                            {% if actionable['epss_score'] is not none %}
+                            <span class="priority-badge p0">
+                                {{ "%.1f" | format(actionable['epss_score'] * 100) }}%
+                            </span>
+                            {% else %}
+                            <span class="priority-badge p0">N/A</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if actionable['secure_version_available'] %}
+                            <span class="action-status success">✓ Secure version available</span>
+                            {% elif actionable['current_version_score'] and actionable['latest_version_score'] and
+                            actionable['current_version_score'] - actionable['latest_version_score'] > 10 %}
+                            <span class="action-status warning">↗ Better upgrade available</span>
+                            {% else %}
+                            <span class="action-status danger">✗ No secure version available</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <a href="/actionable/v3/package_scan?actionable_id={{actionable['versionless_id']}}&version_in_use={{actionable['current_version']}}"
+                                target="_blank" class="btn-simple danger">See available version</a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+
+        <!-- P1 - High Priority -->
+        {% if p1_items | length > 0 %}
+        <div class="priority-section">
+            <div class="priority-header p1">
+                <span>P1 - High Priority</span>
+                <span>{{ p1_items | length }} items{% if include_epss %} - EPSS > 0.7{% endif %}</span>
+            </div>
+            <table class="table priority-table" id="p1-actionables">
+                <thead>
+                    <tr>
+                        <th width="3%">#</th>
+                        <th width="8%">Type</th>
+                        <th width="25%">Namespace</th>
+                        <th width="20%">Package Name</th>
+                        <th width="10%">Version</th>
+                        <th width="10%">Exploitability</th>
+                        <th width="16%">Status</th>
+                        <th width="8%">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for actionable in p1_items %}
+                    <tr>
+                        <td>{{ loop.index }}</td>
+                        <td>
+                            {% if actionable['package_type'] %}
+                            <span class="package-type">{{ actionable['package_type'] }}</span>
+                            {% else %}
+                            <span class="package-type">unknown</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if actionable['package_namespace'] %}
+                            <span class="package-namespace">{{ actionable['package_namespace'] }}</span>
+                            {% else %}
+                            <span class="package-namespace">N/A</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if actionable['package_name'] %}
+                            <a href="/actionable/v3/package-details?package_url={{ actionable['full_package_url'] | urlencode }}&version={{ actionable['current_version'] | urlencode }}" class="package-name-link">
+                                <span class="package-name">{{ actionable['package_name'] }}</span>
+                            </a>
+                            {% else %}
+                            <a href="/actionable/v3/package-details?package_url={{ actionable['full_package_url'] | urlencode }}&version={{ actionable['current_version'] | urlencode }}" class="package-name-link">
+                                <span class="package-name">{{ actionable['full_package_url'] }}</span>
+                            </a>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <span class="version-badge">{{ actionable['current_version'] }}</span>
+                        </td>
+                        <td>
+                            {% if actionable['epss_score'] is not none %}
+                            <span class="priority-badge p1">
+                                {{ "%.1f" | format(actionable['epss_score'] * 100) }}%
+                            </span>
+                            {% else %}
+                            <span class="priority-badge p1">N/A</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if actionable['secure_version_available'] %}
+                            <span class="action-status success">✓ Secure version available</span>
+                            {% elif actionable['current_version_score'] and actionable['latest_version_score'] and
+                            actionable['current_version_score'] - actionable['latest_version_score'] > 10 %}
+                            <span class="action-status warning">↗ Better upgrade available</span>
+                            {% else %}
+                            <span class="action-status danger">✗ No secure version available</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <a href="/actionable/v3/package_scan?actionable_id={{actionable['versionless_id']}}&version_in_use={{actionable['current_version']}}"
+                                target="_blank" class="btn-simple warning">See available version</a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+
+        <!-- P2 - Medium Priority -->
+        {% if p2_items | length > 0 %}
+        <div class="priority-section">
+            <div class="priority-header p2">
+                <span>P2 - Medium Priority</span>
+                <span>{{ p2_items | length }} items{% if include_epss %} - EPSS > 0.5{% endif %}</span>
+            </div>
+            <table class="table priority-table" id="p2-actionables">
+                <thead>
+                    <tr>
+                        <th width="3%">#</th>
+                        <th width="8%">Type</th>
+                        <th width="25%">Namespace</th>
+                        <th width="20%">Package Name</th>
+                        <th width="10%">Version</th>
+                        <th width="10%">Exploitability</th>
+                        <th width="16%">Status</th>
+                        <th width="8%">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for actionable in p2_items %}
+                    <tr>
+                        <td>{{ loop.index }}</td>
+                        <td>
+                            {% if actionable['package_type'] %}
+                            <span class="package-type">{{ actionable['package_type'] }}</span>
+                            {% else %}
+                            <span class="package-type">unknown</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if actionable['package_namespace'] %}
+                            <span class="package-namespace">{{ actionable['package_namespace'] }}</span>
+                            {% else %}
+                            <span class="package-namespace">N/A</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if actionable['package_name'] %}
+                            <a href="/actionable/v3/package-details?package_url={{ actionable['full_package_url'] | urlencode }}&version={{ actionable['current_version'] | urlencode }}" class="package-name-link">
+                                <span class="package-name">{{ actionable['package_name'] }}</span>
+                            </a>
+                            {% else %}
+                            <a href="/actionable/v3/package-details?package_url={{ actionable['full_package_url'] | urlencode }}&version={{ actionable['current_version'] | urlencode }}" class="package-name-link">
+                                <span class="package-name">{{ actionable['full_package_url'] }}</span>
+                            </a>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <span class="version-badge">{{ actionable['current_version'] }}</span>
+                        </td>
+                        <td>
+                            {% if actionable['epss_score'] is not none %}
+                            <span class="priority-badge p2">
+                                {{ "%.1f" | format(actionable['epss_score'] * 100) }}%
+                            </span>
+                            {% else %}
+                            <span class="priority-badge p2">N/A</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if actionable['secure_version_available'] %}
+                            <span class="action-status success">✓ Secure version available</span>
+                            {% elif actionable['current_version_score'] and actionable['latest_version_score'] and
+                            actionable['current_version_score'] - actionable['latest_version_score'] > 10 %}
+                            <span class="action-status warning">↗ Better upgrade available</span>
+                            {% else %}
+                            <span class="action-status danger">✗ No secure version available</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <a href="/actionable/v3/package_scan?actionable_id={{actionable['versionless_id']}}&version_in_use={{actionable['current_version']}}"
+                                target="_blank" class="btn-simple warning">See available version</a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+
+        <!-- P3 - Low Priority -->
+        {% if p3_items | length > 0 %}
+        <div class="priority-section">
+            <div class="priority-header p3">
+                <span>P3 - Low Priority</span>
+                <span>{{ p3_items | length }} items{% if include_epss %} - EPSS ≤ 0.5{% else %} - All packages{% endif %}</span>
+            </div>
+            <table class="table priority-table" id="p3-actionables">
+                <thead>
+                    <tr>
+                        <th width="3%">#</th>
+                        <th width="8%">Type</th>
+                        <th width="25%">Namespace</th>
+                        <th width="20%">Package Name</th>
+                        <th width="10%">Version</th>
+                        <th width="10%">Exploitability</th>
+                        <th width="16%">Status</th>
+                        <th width="8%">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for actionable in p3_items %}
+                    <tr>
+                        <td>{{ loop.index }}</td>
+                        <td>
+                            {% if actionable['package_type'] %}
+                            <span class="package-type">{{ actionable['package_type'] }}</span>
+                            {% else %}
+                            <span class="package-type">unknown</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if actionable['package_namespace'] %}
+                            <span class="package-namespace">{{ actionable['package_namespace'] }}</span>
+                            {% else %}
+                            <span class="package-namespace">N/A</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if actionable['package_name'] %}
+                            <a href="/actionable/v3/package-details?package_url={{ actionable['full_package_url'] | urlencode }}&version={{ actionable['current_version'] | urlencode }}" class="package-name-link">
+                                <span class="package-name">{{ actionable['package_name'] }}</span>
+                            </a>
+                            {% else %}
+                            <a href="/actionable/v3/package-details?package_url={{ actionable['full_package_url'] | urlencode }}&version={{ actionable['current_version'] | urlencode }}" class="package-name-link">
+                                <span class="package-name">{{ actionable['full_package_url'] }}</span>
+                            </a>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <span class="version-badge">{{ actionable['current_version'] }}</span>
+                        </td>
+                        <td>
+                            {% if actionable['epss_score'] is not none %}
+                            <span class="priority-badge p3">
+                                {{ "%.1f" | format(actionable['epss_score'] * 100) }}%
+                            </span>
+                            {% else %}
+                            <span class="priority-badge p3">N/A</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if actionable['secure_version_available'] %}
+                            <span class="action-status success">✓ Secure version available</span>
+                            {% elif actionable['current_version_score'] and actionable['latest_version_score'] and
+                            actionable['current_version_score'] - actionable['latest_version_score'] > 10 %}
+                            <span class="action-status warning">↗ Better upgrade available</span>
+                            {% else %}
+                            <span class="action-status danger">✗ No secure version available</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <a href="/actionable/v3/package_scan?actionable_id={{actionable['versionless_id']}}&version_in_use={{actionable['current_version']}}"
+                                target="_blank" class="btn-simple success">See available version</a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+
         {% endif %}
     </div>
+
+    <script type="text/javascript">
+        // Simple CSV download functionality
+        document.getElementById('downloadBtn').addEventListener('click', function () {
+            const date = new Date().toISOString().split('T')[0];
+            const filename = `actionables-priority-${'{{ repository.name }}'}-${'{{ selected_env }}'}-${date}.csv`;
+
+            let csvContent = 'Priority,#,Type,Namespace,Package Name,Version,EPSS Score,Status\n';
+
+            ['p0', 'p1', 'p2', 'p3'].forEach(priority => {
+                const table = document.getElementById(priority + '-actionables');
+                if (table) {
+                    const rows = table.querySelectorAll('tbody tr');
+                    rows.forEach(row => {
+                        const cols = row.querySelectorAll('td');
+                        if (cols.length >= 7) {
+                            const csvRow = [
+                                priority.toUpperCase(),
+                                cols[0].innerText,
+                                cols[1].innerText,
+                                cols[2].innerText.replace(/,/g, ';'),
+                                cols[3].innerText,
+                                cols[4].innerText,
+                                cols[5].innerText,
+                                cols[6].innerText.replace(/,/g, ';')
+                            ];
+                            csvContent += csvRow.join(',') + '\n';
+                        }
+                    });
+                }
+            });
+
+            const blob = new Blob([csvContent], { type: 'text/csv' });
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.setAttribute('href', url);
+            a.setAttribute('download', filename);
+            a.style.display = 'none';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+        });
+    </script>
+    {% include 'includes/footer.html' %}
 </body>
+
 </html>

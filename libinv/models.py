@@ -1,12 +1,21 @@
 import json
 import logging
 import shutil
+import time
+import traceback
 from datetime import datetime
+from datetime import timedelta
+from datetime import timezone
+from io import BytesIO
 from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
-from git import Repo
+import requests
+import semver
 from git.exc import GitCommandError
+from jsonschema import validate
+from packageurl import PackageURL
 from sqlalchemy import CHAR
 from sqlalchemy import JSON
 from sqlalchemy import Boolean
@@ -18,12 +27,16 @@ from sqlalchemy import Index
 from sqlalchemy import Integer
 from sqlalchemy import String
 from sqlalchemy import Text
+from sqlalchemy import and_
+from sqlalchemy import cast
 from sqlalchemy import delete
+from sqlalchemy import exists
 from sqlalchemy import func
+from sqlalchemy import select
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import JSONB
-from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.exc import PendingRollbackError
+from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped
 from sqlalchemy.orm import declarative_mixin
 from sqlalchemy.orm import mapped_column
@@ -31,16 +44,26 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.orm import synonym
 from sqlalchemy.schema import UniqueConstraint
 from sqlalchemy.sql.expression import ClauseElement
+from univers.versions import MavenVersion
+
+if TYPE_CHECKING:
+    from typing import Any
 
 from libinv.base import Base
 from libinv.base import Session
 from libinv.base import conn
 from libinv.env import EXCLUDED_REPOS
+from libinv.env import LIBINV_SERVER
 from libinv.env import LIBINV_TEMP_DIR
+from libinv.env import PURLDB_API_URL
+from libinv.env import SCANCODEIO_API_KEY
+from libinv.env import SCANCODEIO_URL
 from libinv.exceptions import ConflictingInfoError
 from libinv.exceptions import MalformedCaterpillarMessage
 from libinv.helpers import case_insensitive_dict
 from libinv.helpers import explode_git_url
+from libinv.scio_models import DiscoveredPackage
+from libinv.vcs import BitBucketApp
 from libinv.vcs import GitHubApp
 
 MAX_LENGTH_LICENSE = 150
@@ -48,6 +71,7 @@ MAX_LENGTH_VULNERABILITY_DESCRIPTION = 500
 ORGSRE_ACCOUNT_ID = "orgsre"
 
 logger = logging.getLogger(__name__)
+logger.level = logging.DEBUG
 
 
 class PackageLicenseAssociation(Base):
@@ -244,6 +268,10 @@ class Repository(Base):
     pod = Column(String(200))
     subpod = Column(String(200))
 
+    actionable_versions = relationship(
+        "Repository_ActionablePackageAvailableVersion", back_populates="repository"
+    )
+
     UniqueConstraint("org", "name", name="org_repo")
 
     def __str__(self):
@@ -251,11 +279,52 @@ class Repository(Base):
 
     @property
     def url(self):
-        return f"git@{self.provider}:{self.org}/{self.name}"
+        return f"https://{self.provider}/{self.org}/{self.name}"
 
     @classmethod
     def from_url(cls, url):
         return Repository(**explode_git_url(url))
+
+    @property
+    def vcs(self):
+        if self.provider == "github.com":
+            github = GitHubApp()
+            github.authenticate()
+            return github
+        elif self.provider == "bitbucket.org":
+            return BitBucketApp()
+        else:
+            raise NotImplementedError(f"Repository provider: {self.provider} not implemented")
+
+    def clone(self, target_dir):
+        self.vcs.authenticate()
+        self.vcs.clone(self.url, target_dir)
+
+    @classmethod
+    def get_by_git_url(cls, git_url):
+        try:
+            repo_url = Repository.from_url(git_url)
+            repo = (
+                conn.query(Repository)
+                .filter(
+                    and_(
+                        Repository.name == repo_url.name,
+                        Repository.provider == repo_url.provider,
+                        Repository.org == repo_url.org,
+                    )
+                )
+                .first()
+            )
+            return repo
+        except ModuleNotFoundError:
+            return None
+
+    def raise_or_update_sca_issues(self, environment="stage"):
+        actionables = Actionable.get_actionable_and_secure_versions(conn, self.id, environment)
+        if not actionables["results"]:
+            Actionable.close_sca_issue(self)
+        else:
+            Actionable.raise_sca_as_issue(self, actionables)
 
 
 class Account(Base):
@@ -373,13 +442,14 @@ class Secbug(Base, TimestampMixin):
     id = Column(String(50), primary_key=True)
     environment = Column(String(20))
     severity = Column(String(10))
+    summary = Column(String(200))
     description = Column(String(MAX_LENGTH_VULNERABILITY_DESCRIPTION))
-    vulnerability_category = Column(String(40))
+    vulnerability_category = Column(String(120))
     identified_by = Column(String(40))
     company = Column(String(20))
     is_risk = Column(Boolean())
-    pulled_at = Column(DateTime(), nullable=False)
-    deleted_at = Column(DateTime(), nullable=True)
+    pulled_at = Column(DateTime(timezone=True), nullable=False)
+    deleted_at = Column(DateTime(timezone=True), nullable=True)
     repository_id = Column(
         ForeignKey("libinv.repositories.id", onupdate="CASCADE", ondelete="CASCADE")
     )
@@ -394,7 +464,7 @@ class Secbug(Base, TimestampMixin):
         """
         perform soft delete
         """
-        self.deleted_at = datetime.now()
+        self.deleted_at = datetime.now(tz=timezone.utc)
 
     def is_active(self):
         return True if self.deleted_at else False
@@ -402,6 +472,11 @@ class Secbug(Base, TimestampMixin):
     @classmethod
     def get(cls, id: str):
         return cls.all_active().filter(cls.id == id).first()
+
+    @classmethod
+    def get_any(cls, id: str):
+        """Return secbug with given id, even if deleted"""
+        return conn.query(cls).filter(cls.id == id).first()
 
     @classmethod
     def all_active(cls):
@@ -428,17 +503,26 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
 
     images = relationship("Image", back_populates="wasp")
     repository = relationship("Repository")
+    actionable = relationship(
+        "Repository_ActionablePackageAvailableVersion",
+        back_populates="wasp",
+        overlaps="actionable_versions",
+    )
+    actionable_versions = relationship(
+        "Repository_ActionablePackageAvailableVersion", back_populates="wasp", overlaps="actionable"
+    )
 
     def __enter__(self):
         return self
 
-    def __exit__(self, exc_type, exc_value, traceback):
+    def __exit__(self, exc_type, exc_value, exc_traceback):
         if exc_type == MalformedCaterpillarMessage:
             logger.error(exc_value)
             return True
 
         if exc_type:
-            self.throw(f"{exc_type} : {exc_value} : {traceback}")
+            trace = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+            self.throw(f"{exc_type} : {exc_value} : {trace}")
 
         conn.add(self)
         conn.commit()
@@ -455,30 +539,40 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
     @classmethod
     def eat_caterpillar_message(cls, message: dict):
         """
-        Messages are eaten as per the following agreement:
+        Messages must be sent in the following format:
 
-        {
-            "repository": {
-                "url": URL,
-                "commit": COMMIT_ID,
-                "tag": TAG,
-                "commit_author": COMMIT_AUTHOR (To be implemented later)
-            },
-            "aws_environment": stage/papg/prod,
-            "job_url": jenkins_url,
-            "buildx_enabled": true/false
-            "ecr_image": [{
-                "name": <URI upto tag part (ie : )>,
-                "digest": DIGEST,
-                "type": "Image" or "ImageIndex",
-                "platform": <Only present for Image>
-            }...]
-        }
+            {
+                "repository": {
+                    "url": "git@github.com:org-name/repository.git",
+                    "commit": "commit_hash",
+                    "tag": "tag"
+                },
+                "job_url": "https://jenkins/job/project/",
+                "aws_environment": "stage/prod",
+                "buildx_enabled": "1/0",
+                "ecr_image": [
+                    {
+                        "name": "account-id.dkr.ecr.ap-south-1.amazonaws.com/name",
+                        "digest": "sha256:digest",
+                        "type": "Image",
+                        "platform": {
+                            "architecture": "amd64",
+                            "os": "linux"
+                        }
+                    }
+                ],
+                "type": "Bridge",
+                "timestamp": "2024-09-20-03:45:42"
+            }
         """
+
+        if not is_valid_raw_message(message):
+            raise MalformedCaterpillarMessage("Invalid wasp received")
+
+        raw_message = json.dumps(message)
         repository_url = message["repository"]["url"]
         commit = message["repository"]["commit"]
         tag = message["repository"]["tag"]
-        raw_message = json.dumps(message)
         environment = message["aws_environment"]
         jenkins_url = message["job_url"]
 
@@ -505,6 +599,7 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
             environment=environment,
             jenkins_url=jenkins_url,
         )
+
         conn.add(wasp)
         conn.commit()
         logger.info(f"Wasp ate caterpillar: {wasp}")
@@ -553,22 +648,12 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
         """
         repository = self.repository
         commit = self.commit
-        if self.repository.provider == "github.com":
-            github = GitHubApp()
-            github.authenticate()
-        else:
-            raise NotImplementedError(
-                f"Repository provider: {self.repository.provider} not implemented"
-            )
-
         logger.debug(f"[*] Cloning {self.repository.url}")
         target_dir = Path(self.project_dir, f"{repository.name}-{commit[:10]}")
         Path(target_dir).mkdir(exist_ok=True)
         try:
             print("Trying to clone now..", flush=True)
-            # FIXME: temporary fix for cloning until SRE fixes this
-            https_url = repository.url.replace("git@github.com:", "https://github.com/")
-            repo = Repo.clone_from(https_url, target_dir)
+            repo = repository.clone(target_dir)
         except GitCommandError as e:
             logger.error(e)
         try:
@@ -610,7 +695,7 @@ class SastResult(Base, TimestampMixin):
     id = Column(String(150), primary_key=True)
     lob_id = Column(ForeignKey("libinv.sast_lob_metadata.id", onupdate="CASCADE"))
     lob_metadata = relationship("SastLobMetaData")
-    extras = Column(JSON)
+    extras = Column(MutableDict.as_mutable(JSON))
     vulnsnippet = Column(Text)
     githubpath = Column(String(1024))
     secbugurl = Column(String(1024))
@@ -643,6 +728,766 @@ def get_or_create(session, model, defaults=None, **kwargs):
         return instance, True
 
 
+class Actionable(Base):
+    """
+    Stores next safe version of an actionable package
+    """
+
+    __tablename__ = "safe_actionable"
+
+    uuid = Column(String(36), nullable=False, unique=True, default=uuid4, primary_key=True)
+    package_url = Column(String(300), nullable=False, unique=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    available_versions = relationship(
+        "ActionablePackageAvailableVersion",
+        back_populates="actionable",
+        cascade="all, delete-orphan",
+    )
+
+    @classmethod
+    def populate(cls, repository_id=None, environment=None):
+        actionable_purls = cls.get_actionable_for(repository_id, environment)
+        for purl in actionable_purls:
+            purl_name = f"pkg:{purl.type}/{purl.namespace}/{purl.name}"
+            if is_blacklist(purl_name):
+                logger.debug(f"Blacklisted package: {purl_name}")
+                continue
+
+            with Session() as session:
+                available_versions = (
+                    session.query(ActionablePackageAvailableVersion.version)
+                    .filter(ActionablePackageAvailableVersion.package_url == purl_name)
+                    .all()
+                )
+                available_versions = [v[0] for v in available_versions]
+
+                actionable, _ = get_or_create(session, Actionable, package_url=purl_name)
+                if purl.version not in available_versions:
+                    get_or_create(
+                        session,
+                        ActionablePackageAvailableVersion,
+                        package_url=purl_name,
+                        version=purl.version,
+                        is_version_in_use=True,
+                        actionable_id=actionable.uuid,
+                        scan_status="ADDED",
+                        is_latest=False,
+                    )
+                session.add(actionable)
+                session.commit()
+
+    def fetch_and_store_versions(self):
+        logger.info(f"Processing: {self.package_url}")
+        try:
+            query = {"packages": [{"purl": self.package_url}]}
+            response = requests.post(f"{PURLDB_API_URL}/collect/index_packages/", json=query)
+
+            if response.status_code == 200:
+                response_json = response.json()
+                new_versions = set(
+                    PackageURL.from_string(purl).version
+                    for purl in response_json.get("unqueued_packages", [])
+                    + response_json.get("queued_packages", [])
+                )
+
+                if new_versions == ():
+                    logger.error(f"No available versions found for package: {self.package_url}")
+                    return
+
+                results = []
+                for version in new_versions:
+                    results.append(
+                        {
+                            "package_url": self.package_url,
+                            "scan_status": "ADDED",
+                            "is_latest": False,
+                            "vulns_count": None,
+                            "scan_output": None,
+                            "actionable_id": self.uuid,
+                            "version": version,
+                        }
+                    )
+
+                with Session() as session:
+                    for result in results:
+                        get_or_create(session, ActionablePackageAvailableVersion, **result)
+                        session.commit()
+            else:
+                logger.error(f"Error fetching package: {self.package_url} - Error: {response.text}")
+                return
+            conn.commit()
+        except Exception as e:
+            logger.error(f"Error processing package: {self.package_url} - {e}")
+            conn.rollback()
+
+    def get_available_versions(self):
+        available_versions = list()
+        with Session() as session:
+            available_versions = (
+                session.query(ActionablePackageAvailableVersion)
+                .filter(ActionablePackageAvailableVersion.actionable_id == self.uuid)
+                .all()
+            )
+        sorted_versions = sorted(available_versions, key=lambda v: MavenVersion(v.version))
+        return sorted_versions
+
+    @classmethod
+    def get_packages_without_versions(cls):
+        subquery = select(1).where(
+            ActionablePackageAvailableVersion.actionable_id == Actionable.uuid
+        )
+        query = select(Actionable).where(~exists(subquery))
+        return conn.execute(query).scalars().all()
+
+    def get_versions_in_use(self, session):
+        return list(
+            session.query(ActionablePackageAvailableVersion)
+            .filter(ActionablePackageAvailableVersion.actionable_id == self.uuid)
+            .filter(ActionablePackageAvailableVersion.is_version_in_use == True)
+            .all()
+        )
+
+    def get_safe_versions(self):
+        with Session() as session:
+            result = list(
+                session.query(ActionablePackageAvailableVersion)
+                .filter(ActionablePackageAvailableVersion.actionable_id == self.uuid)
+                .filter(ActionablePackageAvailableVersion.vulns_count == 0)
+                .filter(ActionablePackageAvailableVersion.scan_status == "SUCCESS")
+                .all()
+            )
+            return sorted(result, key=lambda v: MavenVersion(v.version))
+
+    def get_versions_between(self, start_version, end_version):
+        versions = self.get_available_versions()
+        start_index = None
+        end_index = None
+        for i in range(0, len(versions)):
+            if not start_index and versions[i].version == start_version.version:
+                start_index = i
+            if not end_index and versions[i].version == end_version:
+                end_index = i
+
+        return versions[start_index : end_index + 1]
+
+    def find_safe_version_in(self, list_of_versions):
+        logger.info(f"Finding closest safe version for : {self.package_url}")
+
+        if len(list_of_versions) == 0:
+            logger.error(f"No available versions found for package: {self.package_url}")
+            return
+
+        left, right = 0, len(list_of_versions) - 1
+        safe_version_obj = None
+
+        while left <= right:
+            mid = (left + right) // 2
+            mid_version = list_of_versions[mid]
+            logger.info(f"Checking version: {mid_version}")
+
+            mid_version.scan_and_update_results()
+
+            if mid_version._get_vulnerabilities_count() == 0:
+                safe_version_obj = mid_version
+                right = mid - 1
+            else:
+                left = mid + 1
+
+        if safe_version_obj:
+            logger.warning(
+                f"Closest safe version for {self.package_url}: {safe_version_obj.version}"
+            )
+            self.scan_complete = True
+        else:
+            logger.warning(f"No safe version found for {self.package_url}")
+            self.scan_complete = True
+
+        conn.commit()
+
+    def get_latest(self):
+        with Session() as session:
+            return (
+                session.query(ActionablePackageAvailableVersion)
+                .filter(ActionablePackageAvailableVersion.actionable_id == self.uuid)
+                .filter(ActionablePackageAvailableVersion.is_latest == True)
+                .one_or_none()
+            )
+
+    @classmethod
+    def get_safe_version_for(cls, session, package_url):
+        package_url = PackageURL.from_string(package_url)
+        current_version = (
+            session.query(ActionablePackageAvailableVersion)
+            .filter(
+                ActionablePackageAvailableVersion.package_url
+                == f"pkg:{package_url.type}/{package_url.namespace}/{package_url.name}",
+                ActionablePackageAvailableVersion.version == package_url.version,
+            )
+            .one_or_none()
+        )
+        if current_version:
+            return current_version.get_safe_upgrade()
+        else:
+            return "NO_SAFE_VERSION"
+
+    def mark_latest_version(self):
+        """
+        Mark the maximum version as latest for each actionable package.
+        """
+        with Session() as session:
+            versions = (
+                session.query(ActionablePackageAvailableVersion)
+                .filter(ActionablePackageAvailableVersion.actionable_id == self.uuid)
+                .all()
+            )
+            for version in versions:
+                version.is_latest = False
+
+            latest_version = max(versions, key=lambda v: MavenVersion(v.version))
+            latest_version.is_latest = True
+            session.commit()
+
+    @classmethod
+    def get_actionable(cls, session, repository_id, environment):
+        return (
+            session.query(Repository_ActionablePackageAvailableVersion)
+            .join(ActionablePackageAvailableVersion)
+            .filter(Repository_ActionablePackageAvailableVersion.repository_id == repository_id)
+            .filter(Repository_ActionablePackageAvailableVersion.environment == environment)
+            .all()
+        )
+
+    @classmethod
+    def get_actionable_and_secure_versions(
+        cls, session, repository_id, environment, with_metadata=True
+    ):
+        actionable_packages = Actionable.get_actionable(session, repository_id, environment)
+        results = []
+
+        for package in actionable_packages:
+            current_version = package.available_version.version
+
+            if (
+                not package.available_version.vulns_count
+                or package.available_version.vulns_count == 0
+            ):
+                continue
+
+            latest_version = package.available_version.actionable.get_latest()
+
+            secure_versions = None
+            secure_versions = [
+                package.version
+                for package in package.available_version.actionable.get_safe_versions()
+            ]
+
+            results.append(
+                {
+                    "secure_version_available": len(secure_versions) > 0,
+                    "full_package_url": package.available_version.package_url,
+                    "current_version": current_version,
+                    "current_version_score": package.available_version.epss_score,
+                    "latest_version_score": latest_version.score,
+                    "suggested_versions": secure_versions,
+                    "versionless_id": package.available_version.actionable.uuid,
+                }
+            )
+
+        commit_id = ""
+        jenkins_url = ""
+
+        if with_metadata and len(actionable_packages) > 0:
+            commit_id = actionable_packages[0].wasp.commit
+            jenkins_url = actionable_packages[0].wasp.jenkins_url
+
+        results = sorted(results, key=lambda x: x["secure_version_available"], reverse=True)
+
+        if with_metadata:
+            return {"commit_id": commit_id, "jenkins_url": jenkins_url, "results": results}
+        return results
+
+    @staticmethod
+    def get_actionables_issue(repo):
+        """
+        Checks if an issue already exists in the GitHub repository.
+        """
+        issues = repo.vcs.get_issues(repo)
+        for issue in issues:
+            for label in issue["labels"]:
+                if label["name"] == f"sca-actionable-{repo.name}":
+                    return issue["url"], True
+        return None, False
+
+    @staticmethod
+    def prepare_git_issue_content(result):
+        title = "[Security] Immediate package upgrades required"
+        msg = """\
+### Following are the packages that require an update
+
+<details>
+  <summary><strong>FAQ's</strong></summary>
+
+  <pre><code>
+1. Why do we need to upgrade these packages?
+
+   The following packages have introduced vulnerabilities in our codebase—either directly or through their dependencies.
+   They are listed below in order of priority.
+
+2. The suggested version upgrades could break the service. What should we do?
+
+   You can click on the suggested version values to open the SupplyShield page. There, you'll find the full list of
+   available versions and can manually trigger a vulnerability scan before upgrading.
+   
+3. I can't find any vulnerabilities in the given package. Doesn't that mean it's safe?
+
+   Our scans also check transitive (child) dependencies. Even if the package itself appears clean, it may be using
+   another package with known vulnerabilities.
+  </code></pre>
+</details>
+
+"""
+        sorted_result = sorted(
+            result["results"], key=lambda x: x["current_version_score"], reverse=True
+        )
+        
+        # Separate P0 issues (epss_score > 0.8) from other issues
+        p0_issues = []
+        other_issues = []
+        
+        for action_item in sorted_result:
+            epss_score = action_item.get("current_version_score")
+            if epss_score is not None and epss_score > 0.8:
+                p0_issues.append(action_item)
+            else:
+                other_issues.append(action_item)
+        
+        # Add P0 issues table if any exist
+        if p0_issues:
+            msg += "### 🚨 Critical Priority (P0)\n\n"
+            msg += "| Package | Current Version | Suggested Versions |\n"
+            msg += "|-------------|----------------|--------------------|\n"
+            
+            for action_item in p0_issues:
+                versions_url = f"{LIBINV_SERVER}/actionable/v3/package_scan?actionable_id={action_item['versionless_id']}&version_in_use={action_item['current_version']}"
+                suggested_versions = action_item["suggested_versions"]
+                pacakge_name = PackageURL.from_string(action_item['full_package_url']).name
+                if not suggested_versions:
+                    suggested_versions = "🔍"
+                else:
+                    suggested_versions = ", ".join(suggested_versions)
+                msg += (
+                    f"| {pacakge_name} "
+                    f"| {action_item['current_version']} "
+                    f"| [{suggested_versions}]({versions_url}) |\n"
+                )
+            msg += "\n"
+        
+        if other_issues:
+            if p0_issues:
+                msg += "<details>\n"
+                msg += "  <summary><strong>Other Priority Issues (P1/P2/P3)</strong></summary>\n\n"
+                msg += "| Package | Current Version | Suggested Versions |\n"
+                msg += "|-------------|----------------|--------------------|\n"
+                
+                for action_item in other_issues:
+                    versions_url = f"{LIBINV_SERVER}/actionable/package_scan?actionable_id={action_item['versionless_id']}&version_in_use={action_item['current_version']}"
+                    suggested_versions = action_item["suggested_versions"]
+                    pacakge_name = PackageURL.from_string(action_item['full_package_url']).name
+                    if not suggested_versions:
+                        suggested_versions = "🔍"
+                    else:
+                        suggested_versions = ", ".join(suggested_versions)
+                    msg += (
+                        f"| {pacakge_name} "
+                        f"| {action_item['current_version']} "
+                        f"| [{suggested_versions}]({versions_url}) |\n"
+                    )
+                msg += "\n</details>\n\n"
+            else:
+                msg += "### All issues\n\n"
+                msg += "| Package | Current Version | Suggested Versions |\n"
+                msg += "|-------------|----------------|--------------------|\n"
+                
+                for action_item in other_issues:
+                    versions_url = f"{LIBINV_SERVER}/actionable/v3/package_scan?actionable_id={action_item['versionless_id']}&version_in_use={action_item['current_version']}"
+                    suggested_versions = action_item["suggested_versions"]
+                    pacakge_name = PackageURL.from_string(action_item['full_package_url']).name
+                    if not suggested_versions:
+                        suggested_versions = "🔍"
+                    else:
+                        suggested_versions = ", ".join(suggested_versions)
+                    msg += (
+                        f"| {pacakge_name} "
+                        f"| {action_item['current_version']} "
+                        f"| [{suggested_versions}]({versions_url}) |\n"
+                    )
+                msg += "\n"
+        
+        if result["commit_id"]:
+            msg += f"\n**Commit ID:** `{result['commit_id']}`\n"
+        if result["jenkins_url"]:
+            msg += f"**Jenkins URL:** {result['jenkins_url']}\n"
+        return title, msg
+
+    @classmethod
+    def raise_sca_as_issue(cls, repo, actionables):
+        """
+        Creates an issue in the GitHub repository or updates if the issue already exists.
+        """
+        issue_url, existing_issue = cls.get_actionables_issue(repo)
+        title, message = cls.prepare_git_issue_content(actionables)
+
+        if existing_issue:
+            repo.vcs.update_issue(
+                issue_url, title, message, [f"sca-actionable-{repo.name}"], "Task"
+            )
+        else:
+            repo.vcs.create_issue(repo, title, message, [f"sca-actionable-{repo.name}"], "Task")
+            repo.vcs.update_label(repo, f"sca-actionable-{repo.name}", {"color": "b62c41"})
+
+    @classmethod
+    def close_sca_issue(cls, repo):
+        """
+        Closes an issue in the GitHub repository.
+        """
+        issue_url, existing_issue = cls.get_actionables_issue(repo)
+        if existing_issue:
+            repo.vcs.close_issue(issue_url)
+        else:
+            logger.error("No Issues were created for this repo")
+
+
+class ActionablePackageAvailableVersion(Base):
+    """
+    Stores all available versions of an actionable package
+    """
+
+    __tablename__ = "actionable_package_available_versions"
+
+    uuid = Column(String(36), nullable=False, unique=True, default=uuid4, primary_key=True)
+    scan_status = Column(String(20), nullable=False)
+    package_url = Column(String(300), nullable=False)
+    version = Column(String(100), nullable=False)
+    is_latest = Column(Boolean, nullable=False)
+    vulns_count = Column(Integer, nullable=True)
+    epss_score = Column(Float(precision=6), nullable=True)
+    scan_output = Column(Text, nullable=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    is_version_in_use = Column(Boolean, default=False)
+    actionable_id = Column(
+        ForeignKey("libinv.safe_actionable.uuid", onupdate="CASCADE", ondelete="CASCADE")
+    )
+    scancode_project_uuid = Column(String(36), nullable=True)
+    actionable = relationship("Actionable", back_populates="available_versions")
+    associated_repositories = relationship(
+        "Repository_ActionablePackageAvailableVersion",
+        back_populates="available_version",
+        primaryjoin="ActionablePackageAvailableVersion.uuid == Repository_ActionablePackageAvailableVersion.actionable_package_version_id",
+    )
+
+    __table_args__ = (
+        UniqueConstraint("package_url", "version", name="uq_package_version"),
+        {"schema": "libinv"},
+    )
+
+    def __str__(self):
+        return str(self.uuid)
+
+    @property
+    def purl(self):
+        return PackageURL.from_string(self.package_url + "@" + self.version)
+
+    @property
+    def parsed_purl(self):
+        """Return the parsed PackageURL without version for easy access to type, namespace, name"""
+        return PackageURL.from_string(self.package_url)
+
+    def _set_vulns_count(self, vulns_count):
+        self.vulns_count = vulns_count
+
+    def _get_vulnerabilities_count(self):
+        with Session() as session:
+            result = (
+                session.query(
+                    func.sum(
+                        func.jsonb_array_length(
+                            cast(DiscoveredPackage.affected_by_vulnerabilities, JSONB)
+                        )
+                    ).label("total_vulnerabilities")
+                )
+                .filter(DiscoveredPackage.project_id == self.scancode_project_uuid)
+                .filter(DiscoveredPackage.affected_by_vulnerabilities != "[]")
+                .one()
+            )
+            total_vulnerabilities = result.total_vulnerabilities
+            if total_vulnerabilities is None:
+                return 0
+            return int(total_vulnerabilities)
+
+    @property
+    def vulnerabilitiy_severities(self):
+        query = text(
+            """
+            WITH RECURSIVE severities(level) AS (
+                VALUES ('critical'), ('high'), ('medium'), ('low'), ('unknown')
+            ),
+            mdata AS (
+                SELECT 
+                    CASE 
+                        WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(sd.affected_by_vulnerabilities) AS elem WHERE elem::varchar LIKE '%CRITICAL%') THEN 'critical'
+                        WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(sd.affected_by_vulnerabilities) AS elem WHERE elem::varchar LIKE '%HIGH%') THEN 'high'
+                        WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(sd.affected_by_vulnerabilities) AS elem WHERE elem::varchar LIKE '%MEDIUM%' OR elem::varchar LIKE '%MODERATE%') THEN 'medium'
+                        WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(sd.affected_by_vulnerabilities) AS elem WHERE elem::varchar LIKE '%LOW%') THEN 'low'
+                        ELSE 'unknown'
+                    END AS severity_level
+                FROM public.scanpipe_discoveredpackage sd
+                WHERE 
+                    jsonb_array_length(sd.affected_by_vulnerabilities) > 0
+                    AND sd.project_id = :project_id
+            )
+            SELECT 
+                s.level AS severity_level,
+                COALESCE(COUNT(m.severity_level), 0) as count
+            FROM severities s
+            LEFT JOIN mdata m ON m.severity_level = s.level
+            GROUP BY s.level
+            ORDER BY 
+                CASE s.level 
+                    WHEN 'critical' THEN 1 
+                    WHEN 'high' THEN 2 
+                    WHEN 'medium' THEN 3 
+                    WHEN 'low' THEN 4 
+                    ELSE 5 
+                END;
+            """
+        )
+
+        with Session() as session:
+            if self.scancode_project_uuid is None:
+                return None
+            result = session.execute(query, {"project_id": self.scancode_project_uuid})
+            data = [{"severity_level": row.severity_level, "count": row.count} for row in result]
+            return data
+
+    @property
+    def score(self):
+        severities = self.vulnerabilitiy_severities
+        if not severities:
+            return None
+        score = 0
+        for severity in severities:
+            if severity["severity_level"] == "critical":
+                score += severity["count"] * 20
+            elif severity["severity_level"] == "high":
+                score += severity["count"] * 10
+            elif severity["severity_level"] == "medium":
+                score += severity["count"] * 5
+            elif severity["severity_level"] == "low":
+                score += severity["count"] * 1
+        return score
+
+    @classmethod
+    def get_latest_packages(cls):
+        with Session() as session:
+            return session.query(cls).filter(cls.is_latest == True).all()
+
+    @classmethod
+    def get_scan_failed_packages(cls):
+        with Session() as session:
+            return (
+                session.query(cls)
+                .filter(cls.vulns_count == None)
+                .filter(cls.scan_status == "FAILED")
+                .all()
+            )
+
+    @classmethod
+    def get_packages_in_use(cls):
+        with Session() as session:
+            return session.query(cls).filter(cls.is_version_in_use == True).all()
+
+    def scan_and_update_results(self, session=None, is_rescan=False):
+        """ "
+        The function triggers a scan for the package and updates the results.
+        """
+        logger.info(f"Scanningz: {self}")
+        if self.scan_status == "SUCCESS" and not is_rescan:
+            logger.info(f"Scan already completed for: {self}")
+            return
+
+        try:
+            request_session = requests.Session()
+            self.scan_status = "TRIGGERED"
+            if SCANCODEIO_API_KEY:
+                request_session.headers.update({"Authorization": f"Token {SCANCODEIO_API_KEY}"})
+
+            projects_api_url = f"{SCANCODEIO_URL}/api/projects/"
+            project_name = f"{str(self)}-{time.time_ns()}"
+            project_data = {
+                "name": project_name,
+                "pipeline": ["load_inventory", "purl_sbom", "load_sbom", "find_vulnerabilities"],
+                "execute_now": True,
+            }
+            scan_data = {
+                "headers": [{"tool_name": "scanpipe"}],
+                "packages": [
+                    {
+                        "type": self.purl.type,
+                        "namespace": self.purl.namespace,
+                        "name": self.purl.name,
+                        "version": self.purl.version,
+                        "qualifiers": "",
+                        "subpath": "",
+                    }
+                ],
+            }
+            memory_file = BytesIO(json.dumps(scan_data).encode())
+            files = {"upload_file": ("dependencies.json", memory_file)}
+
+            response = request_session.post(projects_api_url, data=project_data, files=files)
+            print(projects_api_url)
+            logger.debug(f"Scancodeio response: {response.text}")
+
+            self.scan_output = response.text
+            response_json = response.json()
+            self.scancode_project_uuid = response_json["uuid"]
+            self.vulns_count = self._get_vulnerabilities_count()
+        except Exception as e:
+            self.scan_status = "FAILED"
+            self.scan_output = f"Error running scancodeio - Error: {e}"
+            logger.error(f"Error running scancodeio - Error: {e}")
+        finally:
+            if self.scan_status != "FAILED":
+                self.scan_status = "SUCCESS"
+            if not session:
+                conn.add(self)
+                conn.commit()
+            else:
+                session.add(self)
+                session.commit()
+            memory_file.close()
+
+    @property
+    def is_safe(self):
+        return self.vulns_count == 0
+
+    @property
+    def scanned(self):
+        return self.scan_status == "SUCCESS"
+
+    def get_safe_upgrade(self):
+        """
+        Return the upgrade version if there are any available safe versions above the current version
+        """
+        available_safe_versions = self.actionable.get_safe_versions()
+        current_version = MavenVersion(self.version)
+        for version in available_safe_versions:
+            if MavenVersion(version.version) >= current_version:
+                return version.version
+        return None
+
+    @classmethod
+    def get_by_purl(cls, session, package_url, version):
+        return (
+            session.query(cls)
+            .filter(cls.package_url == package_url)
+            .filter(cls.version == version)
+            .one_or_none()
+        )
+
+    def get_cves(self, session):
+        """
+        Return a set of CVE IDs affecting this package version based on
+        scanpipe discovered packages linked via scancode_project_uuid.
+        """
+        if not self.scancode_project_uuid:
+            return set()
+
+        discovered_packages = (
+            session.query(DiscoveredPackage)
+            .filter(DiscoveredPackage.project_id == self.scancode_project_uuid)
+            .all()
+        )
+
+        cve_set = set()
+        for discovered_pkg in discovered_packages:
+            vulnerabilities = getattr(discovered_pkg, "affected_by_vulnerabilities", [])
+            if not vulnerabilities:
+                continue
+            for vulnerability in vulnerabilities:
+                try:
+                    aliases = vulnerability.get("aliases", [])
+                    for alias in aliases:
+                        if isinstance(alias, str) and alias.upper().startswith("CVE-"):
+                            cve_set.add(alias.upper())
+                except (AttributeError, TypeError):
+                    # Ignore malformed vulnerability entries
+                    continue
+
+        return cve_set
+
+
+class Repository_ActionablePackageAvailableVersion(Base):
+    """
+    Model representing actionable for a repository and the corresponding version in ActionablePackageAvailableVersion table
+    """
+
+    __tablename__ = "repository_actionable_package_versions_association"
+
+    uuid = Column(String(36), nullable=False, unique=True, default=uuid4, primary_key=True)
+    wasp_uuid = Column(ForeignKey("libinv.wasps.uuid", onupdate="CASCADE", ondelete="CASCADE"))
+    actionable_package_version_id = Column(
+        ForeignKey(
+            "libinv.actionable_package_available_versions.uuid",
+            onupdate="CASCADE",
+            ondelete="CASCADE",
+        )
+    )
+    repository_id = Column(
+        ForeignKey("libinv.repositories.id", onupdate="CASCADE", ondelete="CASCADE")
+    )
+    environment = Column(String(20), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    wasp = relationship("Wasp", back_populates="actionable_versions")
+    available_version = relationship(
+        "ActionablePackageAvailableVersion",
+        back_populates="associated_repositories",
+        primaryjoin="Repository_ActionablePackageAvailableVersion.actionable_package_version_id == ActionablePackageAvailableVersion.uuid",
+    )
+    repository = relationship("Repository", back_populates="actionable_versions")
+
+    __table_args__ = ({"schema": "libinv"},)
+
+
+def get_or_update_entry(session, model, query_filter, **kwargs):
+    """
+    Query the database for an entry and update it with the provided kwargs.
+
+    :param session: session object.
+    :param model: model class to query.
+    :param query_filter: A dictionary of filters for the query.
+    :param kwargs: The fields and values to update.
+    :return: The updated object or a message if not found.
+    """
+    try:
+        # Query the database for the entry
+        obj = session.query(model).filter_by(**query_filter).first()
+        if obj:
+            # Update the object with provided kwargs
+            for key, value in kwargs.items():
+                setattr(obj, key, value)
+            session.commit()
+            return obj
+        else:
+            return f"No entry found with filter: {query_filter}"
+    except Exception as e:
+        session.rollback()
+        return f"Error: {str(e)}"
+
+
 def filter_model_collection(model_collection, filter_map: dict):
     """
     Return filtered models from a model collection (say, relationship) according to given filter map
@@ -672,7 +1517,7 @@ def get_base_image_of(image: Image) -> "Image":
     return base
 
 
-def update_safely(session: Session, model: Base, attr: str, value: object):
+def update_safely(session, model, attr: str, value):
     existing_value = getattr(model, attr)
     if existing_value and existing_value != value:
         raise ConflictingInfoError(
@@ -687,3 +1532,199 @@ def update_safely(session: Session, model: Base, attr: str, value: object):
 def is_excluded_repo(repository_url):
     git_url_components = explode_git_url(repository_url)
     return f"{git_url_components['org']}/{git_url_components['name']}" in EXCLUDED_REPOS
+
+
+def is_valid_raw_message(message):
+    """
+    Validate the Wasp message schema
+    """
+    schema = {
+        "type": "object",
+        "properties": {
+            "repository": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string"},
+                    "commit": {"type": "string"},
+                    "tag": {"type": "string"},
+                    "commit_author": {"type": "string"},
+                },
+                "required": ["url", "commit"],
+            },
+            "aws_environment": {"type": "string"},
+            "job_url": {"type": "string"},
+            "buildx_enabled": {"type": "string"},
+            "type": {"type": "string"},
+            "timestamp": {"type": "string"},
+            "ecr_image": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string"},
+                        "digest": {"type": "string"},
+                        "type": {"type": "string"},
+                        "platform": {
+                            "type": "object",
+                            "properties": {
+                                "os": {"type": "string"},
+                                "architecture": {"type": "string"},
+                            },
+                        },
+                    },
+                },
+            },
+        },
+        "required": ["repository", "aws_environment", "job_url", "timestamp"],
+    }
+    try:
+        validate(instance=message, schema=schema)
+        return True
+    except Exception as e:
+        logger.error(f"Invalid wasp message: {e}")
+        return False
+
+
+def is_blacklist(package_name):
+    blacklisted_substrings = []
+    for substring in blacklisted_substrings:
+        if substring in package_name:
+            return True
+    return False
+
+
+class EPSS(Base):
+    """
+    EPSS (Exploit Prediction Scoring System) model to store CVE EPSS scores
+    """
+
+    __tablename__ = "epss"
+
+    cve = Column(String(50), primary_key=True, nullable=False)
+    epss_score = Column(Float(precision=6), nullable=False)
+    epss_percentile = Column(Float(precision=6), nullable=False)
+    epss_date = Column(String(20), nullable=True)
+    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    def __str__(self):
+        return f"{self.cve} - {self.epss_score}"
+
+    @classmethod
+    def get_fresh_cves(cls, session, cve_list, days=30):
+
+        stale_threshold = datetime.now(timezone.utc) - timedelta(days=days)
+
+        fresh_cves = set(
+            r.cve
+            for r in session.query(cls.cve)
+            .filter(cls.cve.in_(cve_list))
+            .filter(cls.updated_at > stale_threshold)
+            .all()
+        )
+        return fresh_cves
+
+    @classmethod
+    def get_stale_or_missing_cves(cls, session, cve_list, days=30):
+        fresh_cves = cls.get_fresh_cves(session, cve_list, days)
+        return [cve for cve in cve_list if cve not in fresh_cves]
+
+    @classmethod
+    def refresh_cves(cls, session, cve_list, verbose=False, logger=None):
+        valid_cves_upper = [c.upper() for c in cve_list]
+        # Use model methods to determine which CVEs need updates
+        to_fetch = cls.get_stale_or_missing_cves(session, valid_cves_upper)
+        fresh_cves = cls.get_fresh_cves(session, valid_cves_upper)
+
+        updated, skipped, failed = 0, 0, len(fresh_cves)
+
+        if verbose and fresh_cves and logger:
+            logger.warning(f"Skipping {len(fresh_cves)} fresh CVEs (updated within 30 days)")
+
+        # Fetch from API if needed
+        if to_fetch:
+            if logger:
+                logger.warning(f"Fetching {len(to_fetch)} CVEs from EPSS API...")
+
+            batch_size = 100
+            for i in range(0, len(to_fetch), batch_size):
+                batch = to_fetch[i : i + batch_size]
+                cve_string = ",".join(batch)
+                try:
+                    response = requests.get(
+                        f"https://api.first.org/data/v1/epss?cve={cve_string}", timeout=8
+                    )
+                    if response.status_code == 200:
+                        api_data = response.json()
+                        new_epss_data = {}
+                        found_cves = set()
+                        for item in api_data.get("data", []):
+                            cve_id = item.get("cve", "").upper()
+                            found_cves.add(cve_id)
+                            new_epss_data[cve_id] = {
+                                "epss_score": float(item.get("epss", 0)),
+                                "epss_percentile": float(item.get("percentile", 0)),
+                                "epss_date": item.get("date", ""),
+                            }
+
+                        for cve_nf in batch:
+                            if cve_nf not in found_cves:
+                                if logger:
+                                    logger.warning(f"CVE {cve_nf} not found in EPSS API, skipping")
+                                continue
+
+                        cls.update_epss_scores(session, new_epss_data)
+                        updated += len([cve for cve in batch if cve in found_cves])
+                        failed += len([cve for cve in batch if cve not in found_cves])
+                    else:
+                        if logger:
+                            logger.error(f"API error: {response.status_code} {response.text}")
+                        failed += len(batch)
+                except Exception as e:
+                    if logger:
+                        logger.error(f"Error fetching EPSS data: {e}")
+                    failed += len(batch)
+
+        return {"updated": updated, "skipped": skipped, "failed": failed}
+
+    @classmethod
+    def update_epss_scores(cls, session, epss_data_dict):
+        """
+        Update or insert EPSS scores from a dictionary of CVE -> data mappings
+        """
+        now = datetime.now(timezone.utc)
+
+        for cve_id, data in epss_data_dict.items():
+            existing = session.query(cls).filter(cls.cve == cve_id).first()
+
+            if existing:
+                # Update existing record
+                existing.epss_score = data["epss_score"]
+                existing.epss_percentile = data["epss_percentile"]
+                existing.epss_date = data["epss_date"]
+                existing.updated_at = now
+            else:
+                # Create new record
+                new_record = cls(
+                    cve=cve_id,
+                    epss_score=data["epss_score"],
+                    epss_percentile=data["epss_percentile"],
+                    epss_date=data["epss_date"],
+                    updated_at=now,
+                )
+                session.add(new_record)
+
+        session.commit()
+
+
+def sort_versions(version_list):
+    """
+    Sorts a list of semantic version strings.
+
+    :param version_list: List of version strings to sort (e.g., ["1.0.0", "2.1.0", "1.10.0"]).
+    :return: A sorted list of version strings.
+    """
+    try:
+        return sorted(version_list, key=semver.Version.parse)
+    except ValueError as e:
+        logger.error(f"Error sorting versions: {e}")
+        return [None]

@@ -22,11 +22,13 @@ Features
 ^^^^^^^^
 
 - **Software Composition Analysis (SCA):** Identify vulnerabilities in your open-source dependencies using grype and osv.
+- **Actionable Dashboard:** Enhanced web interface with EPSS-based priority classification, package details, and secure version recommendations.
 - **Automated Detection of Untrusted Packages:** Identify malicious open-source packages and prevent supply chain attacks.
 - **Automated SBOM Generation:** Track dependencies using tools like cdxgen and syft.
 - **Layer-Based Image Scanning:** Detect unauthorized base images and outdated layers in Docker containers.
-- **Ownership Resolution:** Leverage graph-based mapping to assign vulnerabilities to the right microservices.
 - **Seamless Integration with CI/CD Pipelines:** Automate security checks from development to deployment.
+- **Build Comparison:** Compare vulnerabilities and package changes between different builds to track security improvements over time.
+- **Repository Management:** Comprehensive repository listing with filtering, statistics, and vulnerability tracking across environments.
 
 SupplyShield tech stack is Python, Flask, PostgreSQL and Docker and several libraries.
 

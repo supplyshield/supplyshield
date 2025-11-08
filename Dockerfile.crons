@@ -9,7 +9,6 @@ RUN apt-get update && \
     zip \
     python3-pip \
     python3-dev \
-    default-libmysqlclient-dev \
     build-essential \
     ca-certificates \
     curl \
@@ -29,7 +28,7 @@ RUN apt-get update && \
 EXPOSE 8000
 # copying all files required to install
 COPY /etc ./etc
-COPY requirements.txt pyproject.toml pylintrc setup.cfg Makefile ./
+COPY pyproject.toml pylintrc setup.cfg Makefile ./
 COPY /libinv/cli/cli.py ./libinv/cli/
 COPY /libinv/logger.py /libinv/__init__.py ./libinv/
 RUN make python-deps-dev

@@ -1,0 +1,279 @@
+<!DOCTYPE html>
+<html>
+<head>
+    {% include 'includes/head.html' %}
+</head>
+<body>
+    {% include 'includes/navbar.html' %}
+
+    <div class="container-fluid mt-3">
+        <!-- Repository Alert -->
+        <div class="alert alert-primary" role="alert">
+            <i>You are currently viewing results for <a href="https://{{repository.provider}}/{{repository.org}}/{{repository.name}}">{{ repository.name }}</a> on {{selected_env}} environment. (pod: {{repository.pod}})</i>
+        </div>
+
+        {% if wasps|length < 10  %}
+            <div class="alert alert-warning" role="alert">
+                We have detected that there are less builds for this repository. A build not showing up could indicate that the scans failed.
+            </div>
+        {% endif %}
+
+        {% if vulnerabilities_count_left == 0 or vulnerabilities_count_right == 0  %}
+            <div class="alert alert-warning" role="alert">
+                One of the builds has no vulnerable packages. This could indicate that the scans failed. Please try re-building the project or choose a different build.
+            </div>
+        {% endif %}
+
+        <!-- Build Comparison Card -->
+        <div class="card">
+            <div class="card-header bg-dark text-white">
+                What builds do you want to diff?
+            </div>
+            <div class="card-body">
+                <form action="/compare/builds" method="GET">
+                    <input type="hidden" name="repository_id" value="{{ repository.id }}">
+                    <input type="hidden" name="env" value="{{ selected_env }}">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <label>Select build 1: </label>
+                        </div>
+                        <div class="col-md-6">
+                            <label>Select build 2: </label>
+                        </div>
+                    </div>
+                    <div class="row align-items-center">
+                        <div class="col-md-6">
+                            <select name="wasp_left" class="form-control mt-2" aria-label="Select Build 1">
+                                <option disabled class="placeholder">Select Build 1</option>
+                                {% for wasp in wasps %}
+                                    {% if wasp_left and wasp_left.uuid == wasp.uuid %}
+                                        <option selected value="{{ wasp.uuid }}">{{ wasp.jenkins_url }} - {{ wasp.created_at }}</option>
+                                    {% else %}
+                                        <option value="{{ wasp.uuid }}">{{ wasp.jenkins_url }} - {{ wasp.created_at }}</option>
+                                    {% endif %}
+                                {% endfor %}
+                            </select>
+                        </div>
+                        <div class="col-md-5">
+                            <select name="wasp_right" class="form-control mt-2" aria-label="Select Build 2">
+                                <option disabled class="placeholder">Select Build 2</option>
+                                {% for wasp in wasps %}
+                                    {% if wasp_right and wasp_right.uuid == wasp.uuid %}
+                                        <option selected value="{{ wasp.uuid }}">{{ wasp.jenkins_url }} - {{ wasp.created_at }}</option>
+                                    {% else %}
+                                        <option value="{{ wasp.uuid }}">{{ wasp.jenkins_url }} - {{ wasp.created_at }}</option>
+                                    {% endif %}
+                                {% endfor  %}
+                            </select>
+                        </div>
+                        <div class="col-md-1 well center-block">
+                            <button class="btn btn-primary mt-2 btn-block">Compare</button>
+                        </div>
+                    </div>
+                </form>
+            </div>
+                <div class="card-footer">
+                    <div class="row">
+                        <div class="form-group col-md-4">
+                            <div class="form-check">
+                                <input type="radio" id="hide_matching" name="checkboxes" value="false"> 
+                                <label for="hide_matching">Show only un-matching packages</label>
+                            </div>
+                        </div>
+                        <div class="form-group col-md-4">
+                            <div class="form-check">
+                                <input type="radio" id="show_vulnerable" name="checkboxes" value="false"> 
+                                <label for="show_vulnerable">Show only vulnerable packages</label>
+                            </div>
+                        </div>
+                        <div class="form-group col-md-4">
+                            <div class="form-check">
+                                <input type="radio" id="show_all" name="checkboxes" value="false"> 
+                                <label for="show_all">Show all</label>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+        </div>
+
+        <!-- Diffing Section -->
+        {% if (not packages_left or not packages_right) and (wasp_left and wasp_right) %}
+        <div class="row mt-3">
+                <div class="alert alert-danger" role="alert">
+                    No packages were detected in one of the builds. Please try re-building the project or choose a different build.
+                </div>
+        </div>
+        {% endif %}
+        
+        {% if packages_left or packages_right %}
+        <div class="row mt-3">
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header bg-success text-white">Build 1
+                        <a class="text-white" href="{{ wasp_left.jenkins_url }}" target="_blank">(View)</a>
+                    </div>
+                    <div class="card-body">
+                        <table class="table table-bordered alert-primary">
+                            <tr>
+                                <th>Created At</th>
+                                <td><time datetime="{{ wasp_left.created_at }}"></time></td>
+                            </tr>
+                            <tr>
+                                <th>Commit</th>
+                                <td><a href="{{ wasp_left.repository.url }}/commit/{{ wasp_left.commit}}" target="_blank">Open</a></td>
+                            </tr>
+                            <tr>
+                                <th>No of Child Packages</th>
+                                <td>{{ packages_left | length }}</td>
+                            </tr>
+                            <tr>
+                                <th>No of Vulnerable Packages (⚠️)</th>
+                                <td>{{ vulnerabilities_count_left }}</td>
+                            </tr>
+                        </table>
+                        <ul class="list-group list-group-flush" id="left-packages">
+                            {% for package in packages_left %}
+                                {% if package.affected_by_vulnerabilities %}
+                                    <li class="list-group-item has_vulnerability">{{ package.purl }}</li>
+                                {% else %}
+                                    <li class="list-group-item">{{ package.purl }}</li>
+                                {% endif %}
+                            {% endfor %}
+                        </ul>
+                    </div>
+                </div>
+            </div>
+            <div class="col-md-6">
+                <div class="card">
+                    <div class="card-header bg-success text-white">Build 2
+                        <a class="text-white" href="{{ wasp_left.jenkins_url }}" target="_blank">(View)</a>
+                    </div>
+                    <div class="card-body">
+                        <table class="table table-bordered">
+                            <tr>
+                                <th>Created At</th>
+                                <td><time datetime="{{ wasp_right.created_at }}"></time></td>
+                            </tr>
+                            <tr>
+                                <th>Commit</th>
+                                <td><a href="{{ wasp_right.repository.url }}/commit/{{ wasp_right.commit}}" target="_blank">Open</a></td>
+                            </tr>
+                            <tr>
+                                <th>No of Child Packages</th>
+                                <td>{{ packages_right | length }}</td>
+                            </tr>
+                            <tr>
+                                <th>No of Vulnerable Packages (⚠️)</th>
+                                <td>{{ vulnerabilities_count_right }}</td>
+                            </tr>
+                        </table>
+                        <ul class="list-group list-group-flush" id="right-packages">
+                            {% for package in packages_right %}
+                                {% if package.affected_by_vulnerabilities %}
+                                    <li class="list-group-item has_vulnerability" title="Affected by {{ package.affected_by_vulnerabilities }}">{{ package.purl }}</li>
+                                {% else %}
+                                    <li class="list-group-item">{{ package.purl }}</li>
+                                {% endif %}
+                            {% endfor %}
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+        {% endif %}
+    </div>
+
+    <script>
+        function reset_visibility() {
+            const leftList = document.querySelectorAll("#left-packages li");
+            const rightList = document.querySelectorAll("#right-packages li");
+
+            leftList.forEach(item => { item.style.display = "block"; });
+            rightList.forEach(item => { item.style.display = "block"; });
+        }
+        
+        document.getElementById("show_all").onclick = function() {
+            reset_visibility();
+        }
+
+        document.getElementById("show_vulnerable").onclick = function() {
+            reset_visibility();
+
+            const leftList = document.querySelectorAll("#left-packages li");
+            const rightList = document.querySelectorAll("#right-packages li");
+            
+            if (document.getElementById("show_vulnerable").checked) { 
+                leftList.forEach(item => {
+                    if (!item.classList.contains("has_vulnerability")) {
+                        item.style.display = "none";
+                    }
+                });
+
+                rightList.forEach(item => {
+                    if (!item.classList.contains("has_vulnerability")) {
+                        item.style.display = "none";
+                    }
+                });
+            } 
+        }
+
+        document.getElementById("hide_matching").onclick = function() {
+            reset_visibility();
+
+            const leftList = document.querySelectorAll("#left-packages li");
+            const rightList = document.querySelectorAll("#right-packages li");
+
+            const leftSet = new Set(Array.from(leftList).map(item => item.textContent));
+            const rightSet = new Set(Array.from(rightList).map(item => item.textContent));
+
+            if (document.getElementById("hide_matching").checked) {
+                leftList.forEach(item => {
+                    if (rightSet.has(item.textContent)) {
+                        item.style.display = rightSet.has(item.textContent) ? "none" : "block";
+                    }
+                });
+
+                rightList.forEach(item => {
+                    item.style.display = leftSet.has(item.textContent) ? "none" : "block";
+                });
+            } 
+        }
+
+
+        document.addEventListener("DOMContentLoaded", () => {
+            const leftList = document.querySelectorAll("#left-packages li");
+            const rightList = document.querySelectorAll("#right-packages li");
+
+            const leftSet = new Set(Array.from(leftList).map(item => item.textContent));
+            const rightSet = new Set(Array.from(rightList).map(item => item.textContent));
+
+            leftList.forEach(item => {
+                if (!rightSet.has(item.textContent)) {
+                    item.style.backgroundColor = "lightcoral";
+                }
+            });
+
+            rightList.forEach(item => {
+                if (!leftSet.has(item.textContent)) {
+                    item.style.backgroundColor = "lightblue";
+                }
+            });
+
+            const timeElements = document.querySelectorAll("time");
+
+            timeElements.forEach(timeElement => {
+                const datetime = timeElement.getAttribute("datetime");
+                if (datetime) {
+                    const date = new Date(datetime);
+                    const formattedDate = new Intl.DateTimeFormat('en-US', {
+                        dateStyle: 'medium',
+                        timeStyle: 'short'
+                    }).format(date);
+                    timeElement.textContent = formattedDate;
+                }
+            });
+        });
+    </script>
+</body>
+{% include 'includes/footer.html' %}
+</html>

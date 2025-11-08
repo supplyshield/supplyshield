@@ -96,7 +96,7 @@ def upload_to_s3(file_name, bucket=S3_BUCKET_NAME, object_name=None):
     :param file_name: File to upload
     :param bucket: Bucket to upload to
     :param object_name: S3 object name. If not specified then file_name is used
-    :return: True if file was uploaded, else False
+    :return: object name if file was uploaded, else False
     """
 
     logger.debug(f"Uploading to s3: {file_name}")

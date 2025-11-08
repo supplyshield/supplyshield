@@ -1,16 +1,12 @@
 services:
   db:
-    image: postgres:15.5
+    image: postgres:13
     env_file:
       - docker.env
     volumes:
-      - ./alembic/data/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./etc/init.sql:/docker-entrypoint-initdb.d/init.sql
       - db_data:/var/lib/postgresql/data
     shm_size: "1gb"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U scancodeio"]
-      interval: 10s
-      retries: 5
     restart: always
   
   crons:
@@ -22,6 +18,16 @@ services:
       - db
     restart: always
 
+  daemon:
+    build:
+      dockerfile: Dockerfile.daemon
+    env_file:
+      - docker.env
+    expose:
+      - "8001:8000"
+    depends_on:
+      - crons
+
   scancodeio:
     build:
       context: ./scancodeio/
@@ -32,11 +38,11 @@ services:
         gunicorn scancodeio.wsgi:application --bind :8000 --timeout 600 --workers 8"
     env_file:
       - docker.env
-    ports:
+    expose:
       - "8002:8000"
     depends_on:
       - db
-      - crons
+      - daemon
     volumes:
       - static:/var/scancodeio/static/
   
@@ -45,10 +51,10 @@ services:
       dockerfile: Dockerfile
     env_file:
       - docker.env
-    ports:
+    expose:
       - "8000:5000"
     depends_on:
-      - scancodeio
+      - daemon
 
   metabase:
     image: metabase/metabase:latest
@@ -60,10 +66,10 @@ services:
       - 3000:3000
     environment:
       MB_DB_TYPE: postgres
-      MB_DB_DBNAME: scancodeio
+      MB_DB_DBNAME: libinv
       MB_DB_PORT: 5432
       MB_DB_USER: scancodeio
-      MB_DB_PASS: 
+      MB_DB_PASS: scancodeio
       MB_DB_HOST: db
     healthcheck:
       test: curl --fail -I http://localhost:3000/api/health || exit 1
@@ -73,15 +79,6 @@ services:
     depends_on:
       - db
 
-  daemon:
-    build:
-      dockerfile: Dockerfile.daemon
-    env_file:
-      - docker.env
-    expose:
-      - "8001:8000"
-    depends_on:
-      - crons
 
 volumes:
   static:

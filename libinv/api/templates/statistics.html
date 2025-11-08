@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Statistics - Security Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='actionables-dashboard.css') }}">
+    <style>
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            gap: 1.5rem;
+            margin: 1.5rem 0;
+        }
+        .stats-content {
+            background-color: var(--bg-white);
+            border: 1px solid var(--border-light);
+            border-top: none;
+            border-radius: 0 0 8px 8px;
+            padding: 2rem;
+            box-shadow: var(--shadow-sm);
+        }
+    </style>
+</head>
+
+<body>
+    {% include 'includes/navbar.html' %}
+
+    <div class="page-header">
+        <div class="container-fluid px-4">
+            <h1 class="page-title">Security Statistics</h1>
+            <p class="page-subtitle">Comprehensive overview of packages, vulnerabilities, and EPSS scores</p>
+        </div>
+    </div>
+
+    <div class="container-fluid px-4">
+
+        {% if statistics.error %}
+        <div class="alert alert-warning" role="alert">
+            <h4 class="alert-heading">⚠️ Service Temporarily Unavailable</h4>
+            <p>{{ statistics.error }}</p>
+            <hr>
+            <p class="mb-0">Please try refreshing the page in a few moments.</p>
+        </div>
+        {% endif %}
+
+        <!-- EPSS Priority Distribution for Packages -->
+        <div class="priority-section">
+            <div class="priority-header" style="background-color: var(--bg-light); border-color: var(--border-light); color: var(--text-primary);">
+                <span>Package Priority Distribution (EPSS)</span>
+            </div>
+            <div class="stats-content">
+                <div class="stats-grid">
+                    <div class="stats-card">
+                        <div class="stats-number" style="color: var(--text-primary);">{{ "{:,}".format(statistics.package_stats.vulnerable_packages) }}</div>
+                        <div class="stats-label" style="color: var(--text-secondary);">Total Vulnerable Packages</div>
+                    </div>
+                    <div class="stats-card">
+                        <div class="stats-number" style="color: var(--text-primary);">
+                            <span class="count-badge critical">{{ "{:,}".format(statistics.package_stats.p0_packages) }}</span>
+                        </div>
+                        <div class="stats-label" style="color: var(--text-secondary);">Critical</div>
+                        <div class="stats-description">EPSS > 0.8</div>
+                    </div>
+                    <div class="stats-card">
+                        <div class="stats-number" style="color: var(--text-primary);">
+                            <span class="count-badge high">{{ "{:,}".format(statistics.package_stats.p1_packages) }}</span>
+                        </div>
+                        <div class="stats-label" style="color: var(--text-secondary);">High</div>
+                        <div class="stats-description">EPSS > 0.7</div>
+                    </div>
+                    <div class="stats-card">
+                        <div class="stats-number" style="color: var(--text-primary);">
+                            <span class="count-badge medium">{{ "{:,}".format(statistics.package_stats.p2_packages) }}</span>
+                        </div>
+                        <div class="stats-label" style="color: var(--text-secondary);">Medium</div>
+                        <div class="stats-description">EPSS > 0.5</div>
+                    </div>
+                    <div class="stats-card">
+                        <div class="stats-number" style="color: var(--text-primary);">
+                            <span class="count-badge low">{{ "{:,}".format(statistics.package_stats.p3_packages) }}</span>
+                        </div>
+                        <div class="stats-label" style="color: var(--text-secondary);">Low</div>
+                        <div class="stats-description">EPSS ≤ 0.5</div>
+                    </div>
+                    <div class="stats-card">
+                        <div class="stats-number" style="color: var(--text-primary);">
+                            <span class="count-badge" style="background-color: #9e9e9e;">{{ "{:,}".format(statistics.package_stats.no_epss_packages) }}</span>
+                        </div>
+                        <div class="stats-label" style="color: var(--text-secondary);">No EPSS Score</div>
+                        <div class="stats-description">EPSS data unavailable</div>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+
+
+
+        <!-- Repository Statistics -->
+        <div class="priority-section">
+            <div class="priority-header" style="background-color: var(--bg-light); border-color: var(--border-light); color: var(--text-primary);">
+                <span>Repository Statistics</span>
+                <span>{{ "{:,}".format(statistics.repository_stats.total_repositories) }} total repositories</span>
+            </div>
+            <div class="stats-content">
+                <div class="stats-grid">
+                    <div class="stats-card">
+                        <div class="stats-number" style="color: var(--text-primary);">{{ "{:,}".format(statistics.repository_stats.repositories_with_vulnerabilities) }}</div>
+                        <div class="stats-label" style="color: var(--text-secondary);">Total Vulnerable Repositories</div>
+                        
+                    </div>
+                    <div class="stats-card">
+                        <div class="stats-number" style="color: var(--text-primary);">
+                            <span class="count-badge critical">{{ "{:,}".format(statistics.repository_stats.p0_repositories) }}</span>
+                        </div>
+                        <div class="stats-label" style="color: var(--text-secondary);">Critical</div>
+                        <div class="stats-description">Max EPSS > 0.8</div>
+                    </div>
+                    <div class="stats-card">
+                        <div class="stats-number" style="color: var(--text-primary);">
+                            <span class="count-badge high">{{ "{:,}".format(statistics.repository_stats.p1_repositories) }}</span>
+                        </div>
+                        <div class="stats-label" style="color: var(--text-secondary);">High</div>
+                        <div class="stats-description">Max EPSS > 0.7</div>
+                    </div>
+                    <div class="stats-card">
+                        <div class="stats-number" style="color: var(--text-primary);">
+                            <span class="count-badge medium">{{ "{:,}".format(statistics.repository_stats.p2_repositories) }}</span>
+                        </div>
+                        <div class="stats-label" style="color: var(--text-secondary);">Medium</div>
+                        <div class="stats-description">Max EPSS > 0.5</div>
+                    </div>
+                    <div class="stats-card">
+                        <div class="stats-number" style="color: var(--text-primary);">
+                            <span class="count-badge low">{{ "{:,}".format(statistics.repository_stats.p3_repositories) }}</span>
+                        </div>
+                        <div class="stats-label" style="color: var(--text-secondary);">Low</div>
+                        <div class="stats-description">Max EPSS ≤ 0.5</div>
+                    </div>
+
+                </div>
+            </div>
+        </div>
+
+        <!-- Pod-wise Vulnerable Packages -->
+        {% if statistics.pod_stats %}
+        <div class="priority-section">
+            <div class="priority-header" style="background-color: var(--bg-light); border-color: var(--border-light); color: var(--text-primary);">
+                <span>Pod-wise Vulnerable Packages</span>
+                <span>{{ statistics.pod_stats|length }} pods</span>
+            </div>
+            <table class="priority-table">
+                <thead>
+                    <tr>
+                        <th>Pod</th>
+                        <th>Vulnerable Packages</th>
+                        <th>Critical</th>
+                        <th>High</th>
+                        <th>Medium</th>
+                        <th>Low</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for pod in statistics.pod_stats %}
+                    <tr>
+                        <td><strong class="pod-name">{{ pod.pod }}</strong></td>
+                        <td><span class="count-badge critical" style="opacity:.9;">{{ "{:,}".format(pod.vulnerable_packages) }}</span></td>
+                        <td class="table-tone-critical">{{ pod.p0 }}</td>
+                        <td class="table-tone-high">{{ pod.p1 }}</td>
+                        <td class="table-tone-medium">{{ pod.p2 }}</td>
+                        <td class="table-tone-low">{{ pod.p3 }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+
+
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+
+</html>
