@@ -33,7 +33,11 @@ def run_cicd(wasp, code_directory):
     if not utils.check_folder_exist(f"{wasp.project_dir}/output/result"):
         utils.create_folder(f"{wasp.project_dir}/output/result")
 
-    code_tech = Project_language_detector(code_directory).most_used_language()
+    if Project_language_detector(code_directory).most_used_language() == "Java":
+        code_tech = CodeTech.JAVA
+    else:
+        return None  # only runs for Java project right now
+
     class arg:
         def __init__(self) -> None:
             self.wasp = wasp

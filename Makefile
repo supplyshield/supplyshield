@@ -1,4 +1,4 @@
-PYTHON_EXE=python3
+PYTHON_EXE=python3.10
 GRYPE_VERSION=v0.54.0
 SYFT_VERSION=v0.60.3
 CRANE_VERSION=v0.12.1
@@ -33,7 +33,7 @@ crane:
 
 python-deps-dev: virtualenv
 	@echo "-> Install python deps"
-	@${ACTIVATE}; pip install -e .[DEV]
+	@${ACTIVATE}; pip install -e .
 
 cdxgen:
 	@echo "-> Install cdxgen"
@@ -84,6 +84,7 @@ runserver:
 	@${ACTIVATE}; gunicorn -w 4 'libinv.api.app:app' --bind 0.0.0.0:5000
 
 crons:
+	make init
 	make healthcheck
 	@${ACTIVATE}; python3 libinv/cron_scheduler.py
 

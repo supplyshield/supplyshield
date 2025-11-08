@@ -9,7 +9,6 @@ RUN apt-get update && \
     zip \
     python3-pip \
     python3-dev \
-    default-libmysqlclient-dev \
     build-essential \
     ca-certificates \
     curl \
@@ -28,6 +27,6 @@ RUN apt-get update && \
     npm install npm@latest -g
 EXPOSE 8000
 COPY . .
-RUN make install && \
+RUN make python-deps-dev && \
     make docs
 CMD ["make","runserver"]

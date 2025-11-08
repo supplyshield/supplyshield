@@ -1,5 +1,8 @@
+import logging
+
 import requests
-from tqdm.contrib.concurrent import process_map
+from sqlalchemy.exc import MultipleResultsFound
+from tqdm import tqdm
 
 from libinv import Repository
 from libinv import Session
@@ -7,31 +10,63 @@ from libinv.cli.cli import cli
 from libinv.env import GIT_ORG
 from libinv.env import GIT_PROVIDER
 from libinv.env import SERVICE_METADATA_URL
+from libinv.helpers import explode_git_url
 from libinv.models import get_or_create
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 
 def metapod_services():
     return requests.get(SERVICE_METADATA_URL).json()["details"]
 
 
-def update_and_add_repositories_using_metapod(metapod_service):
-    repository_name = metapod_service["name"]
-    subpod = metapod_service["subpod"]["name"]
-    pod = metapod_service["subpod"]["pod"]["name"]
-    with Session() as session:
-        repository, _ = get_or_create(
-            session=session,
-            model=Repository,
-            name=repository_name,
-            provider=GIT_PROVIDER,
-            org=GIT_ORG,
-        )
-        repository.pod = pod
-        repository.subpod = subpod
-        session.commit()
+def process_metapod_service(metapod_service):
+    repo_url = metapod_service.get("repository_url")
+    if not repo_url:
+        return {
+            "name": metapod_service["name"],
+            "provider": GIT_PROVIDER,
+            "org": GIT_ORG,
+            "subpod": metapod_service["subpod"]["name"],
+            "pod": metapod_service["subpod"]["pod"]["name"],
+        }
+
+    url_parts = explode_git_url(repo_url)
+
+    return {
+        "name": metapod_service["name"],
+        "provider": url_parts["provider"],
+        "org": url_parts["org"],
+        "subpod": metapod_service["subpod"]["name"],
+        "pod": metapod_service["subpod"]["pod"]["name"],
+    }
 
 
 @cli.command()
 def import_and_improve_from_metapod():
     services = metapod_services()
-    process_map(update_and_add_repositories_using_metapod, services, chunksize=20)
+    processed_services = []
+
+    for service in services:
+        processed = process_metapod_service(service)
+        if processed:
+            processed_services.append(processed)
+
+    logger.info(f"Processing {len(processed_services)} services")
+
+    with Session() as session:
+        for service in tqdm(processed_services):
+            try:
+                repository, _ = get_or_create(
+                    session=session,
+                    model=Repository,
+                    name=service["name"],
+                    provider=service["provider"],
+                    org=service["org"],
+                )
+                repository.pod = service["pod"]
+                repository.subpod = service["subpod"]
+                session.commit()
+            except MultipleResultsFound as e:
+                logger.info(f"Found duplicate repo {service['name']}: skipping")

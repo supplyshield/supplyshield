@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Repositories - Security Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='actionables-dashboard.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='repositories-listing.css') }}">
+</head>
+
+<body>
+    {% include 'includes/navbar.html' %}
+
+    <div class="page-header">
+        <div class="container-fluid px-4">
+            <h1 class="page-title">Repositories</h1>
+            <p class="page-subtitle">Security overview and vulnerability management across all repositories</p>
+        </div>
+    </div>
+
+    <div class="container-fluid px-4">
+
+        <!-- Filters Section -->
+        <div class="alert alert-info mb-4">
+            <form method="GET" id="filterForm">
+                <div class="row align-items-end">
+                    <div class="col-md-2">
+                        <label for="search" class="form-label"><strong>Search Repositories</strong></label>
+                        <input type="text" class="form-control" id="search" name="search" 
+                               placeholder="Repository or organization name..."
+                               value="{{ current_filters.search }}">
+                    </div>
+                    <div class="col-md-2">
+                        <label for="environment" class="form-label"><strong>Environment</strong></label>
+                        <select class="form-select" id="environment" name="environment">
+                            <option value="">All Environments</option>
+                            {% for env in filter_options.environments %}
+                            <option value="{{ env }}" {% if current_filters.environment == env %}selected{% endif %}>
+                                {{ env }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label for="pod" class="form-label"><strong>Pod</strong></label>
+                        <select class="form-select" id="pod" name="pod">
+                            <option value="">All Pods</option>
+                            {% for pod in filter_options.pods %}
+                            <option value="{{ pod }}" {% if current_filters.pod == pod %}selected{% endif %}>
+                                {{ pod }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label for="org" class="form-label"><strong>Organization</strong></label>
+                        <select class="form-select" id="org" name="org">
+                            <option value="">All Organizations</option>
+                            {% for org in filter_options.orgs %}
+                            <option value="{{ org }}" {% if current_filters.org == org %}selected{% endif %}>
+                                {{ org }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label for="priority" class="form-label"><strong>Priority Level</strong></label>
+                        <select class="form-select" id="priority" name="priority">
+                            <option value="">All Priorities</option>
+                            <option value="p0" {% if current_filters.priority == "p0" %}selected{% endif %}>
+                                P0 - Critical (EPSS > 0.8)
+                            </option>
+                            <option value="p1" {% if current_filters.priority == "p1" %}selected{% endif %}>
+                                P1 - High (EPSS > 0.7)
+                            </option>
+                            <option value="p2" {% if current_filters.priority == "p2" %}selected{% endif %}>
+                                P2 - Medium (EPSS > 0.5)
+                            </option>
+                            <option value="p3" {% if current_filters.priority == "p3" %}selected{% endif %}>
+                                P3 - Low (EPSS ≤ 0.5)
+                            </option>
+                            <option value="no_epss" {% if current_filters.priority == "no_epss" %}selected{% endif %}>
+                                No EPSS Data
+                            </option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label for="has_vulnerabilities" class="form-label"><strong>Vulnerability Status</strong></label>
+                        <select class="form-select" id="has_vulnerabilities" name="has_vulnerabilities">
+                            <option value="">All Repositories</option>
+                            <option value="true" {% if current_filters.has_vulnerabilities == "true" %}selected{% endif %}>
+                                With Vulnerabilities
+                            </option>
+                            <option value="false" {% if current_filters.has_vulnerabilities == "false" %}selected{% endif %}>
+                                No Vulnerabilities
+                            </option>
+                        </select>
+                    </div>
+                    <div class="col-md-1 mt-2">
+                        <button type="submit" class="btn btn-primary w-100">Filter</button>
+                    </div>
+                </div>
+                <div class="row mt-2">
+                    <div class="col-12">
+                        <a href="/actionable/v3/repositories" class="btn btn-link p-0">Clear all filters</a>
+                    </div>
+                </div>
+            </form>
+        </div>
+
+        {% if not repositories %}
+        <div class="no-actionables">
+            <div class="success-icon">🔍</div>
+            <h5>No repositories found</h5>
+            <p class="text-muted mb-0">
+                No repositories match your current filter criteria. Try adjusting your filters.
+            </p>
+        </div>
+        {% else %}
+
+        <!-- Repositories Table -->
+        <div class="priority-section">
+            <div class="priority-header" style="background-color: var(--primary-blue); border-color: var(--primary-blue); color: white;">
+                <span>Repository Overview</span>
+                <span>{{ repositories | length }} repositories</span>
+            </div>
+            
+            <table class="table priority-table">
+                <thead>
+                    <tr>
+                        <th width="30%">Repository</th>
+                        <th width="20%">Organization</th>
+                        <th width="15%">Pod</th>
+                        <th width="15%">Subpod</th>
+                        <th width="20%">View</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for repo in repositories %}
+                    <tr>
+                        <td>
+                            <div class="d-flex flex-column">
+                                {% set first_env = repo.environments.keys() | list | first %}
+                                <a href="/actionable/v3/?repository_id={{ repo.id }}&env={{ first_env }}" class="package-name-link">
+                                    <strong class="package-name">{{ repo.name }}</strong>
+                                </a>
+                                <small class="text-muted">{{ repo.provider }}/{{ repo.org }}/{{ repo.name }}</small>
+                            </div>
+                        </td>
+                        <td>
+                            <strong class="organization-name">{{ repo.org }}</strong>
+                        </td>
+                        <td>
+                            {% if repo.pod %}
+                            <strong class="pod-name">{{ repo.pod }}</strong>
+                            {% else %}
+                            <span class="text-muted">N/A</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if repo.subpod %}
+                            <span class="subpod-name">{{ repo.subpod }}</span>
+                            {% else %}
+                            <span class="text-muted">N/A</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <div class="d-flex flex-wrap gap-1">
+                                {% for env, env_data in repo.environments.items() %}
+                                <a href="/actionable/v3/?repository_id={{ repo.id }}&env={{ env }}" 
+                                   class="btn-simple {% if env_data.vulnerable_packages > 0 %}danger{% else %}success{% endif %}" 
+                                   title="{{ env_data.total_packages }} packages, {{ env_data.vulnerable_packages }} vulnerable - View {{ env }} dashboard">
+                                    {{ env }}
+                                </a>
+                                {% endfor %}
+                            </div>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        {% endif %}
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='repositories-listing.js') }}"></script>
+
+
+</body>
+
+</html>
