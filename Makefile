@@ -1,10 +1,9 @@
-PYTHON_EXE=python3.10
+PYTHON_EXE=python3
 GRYPE_VERSION=v0.54.0
 SYFT_VERSION=v0.60.3
 CRANE_VERSION=v0.12.1
 VENV=venv
 ACTIVATE?=. ${VENV}/bin/activate
-VIRTUALENV_PYZ=etc/third_party/virtualenv.pyz
 OS=Linux
 ARCH=arm64
 
@@ -32,6 +31,9 @@ crane:
 		| tar xvzf - -C etc/third_party crane
 
 python-deps-dev: virtualenv
+	@echo "-> Upgrade pip/setuptools for Python 3.13"
+	@${ACTIVATE}; python -m pip install --upgrade pip setuptools wheel
+
 	@echo "-> Install python deps"
 	@${ACTIVATE}; pip install -e .
 
@@ -41,8 +43,8 @@ cdxgen:
 	npm install --prefix etc/third_party/ @cyclonedx/cdxgen-plugins-bin
 
 virtualenv:
-	@echo "-> Bootstrap the virtualenv with PYTHON_EXE=${PYTHON_EXE}"
-	@${PYTHON_EXE} ${VIRTUALENV_PYZ} ${VENV} --prompt libinv
+	@echo "-> Bootstrap venv using Python's built-in venv"
+	@${PYTHON_EXE} -m venv ${VENV}
 
 clean:
 	rm etc/third_party/grype
