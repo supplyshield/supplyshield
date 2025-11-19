@@ -30,7 +30,7 @@ services:
 
   scancodeio:
     build:
-      context: ./scancodeio/
+      context: ./scancode.io/
       dockerfile: Dockerfile
     command: wait-for-it --strict --timeout=60 db:5432 -- sh -c "
         ./manage.py migrate &&
