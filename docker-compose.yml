@@ -83,7 +83,7 @@ services:
     env_file:
       - docker.env
     environment:
-      GITHUB_APP_PRIVATE_KEY_FILE: /run/secrets/github_app_private_key
+      JOBS: '{"populate_actionable_purl_versions": {"command": "libinv --debug populate-actionable-purl-versions", "timeout": 1400, "interval": 172800}, "update_latest_version_tag": {"command": "libinv update-latest-version-tag", "timeout": 600, "interval": 172800}, "epss_update": {"command": "libinv --debug epss-update --all-actionable-cves", "timeout": 3600, "interval": 86400}, "calculate_package_epss": {"command": "libinv --debug calculate-package-epss", "timeout": 3600, "interval": 86400}, "scan_versions_in_use": {"command": "libinv --debug scan-versions-in-use", "timeout": 3600, "interval": 172800}, "scan_latest_versions": {"command": "libinv --debug scan-latest-versions", "timeout": 3600, "interval": 172800}, "populate_next_safe_versions": {"command": "libinv --debug populate-next-safe-versions", "timeout": 1400, "interval": 172800}}'
     depends_on:
       db:
         condition: service_healthy
@@ -91,8 +91,6 @@ services:
         condition: service_started
       scancode-migrate:
         condition: service_completed_successfully
-    secrets:
-      - github_app_private_key
     restart: always
   
   web:
