@@ -1,50 +1,100 @@
 services:
   db:
-    image: postgres:13
+    image: postgres:15
     env_file:
       - docker.env
     volumes:
-      - ./etc/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./etc/initdb:/docker-entrypoint-initdb.d
       - db_data:/var/lib/postgresql/data
     shm_size: "1gb"
     restart: always
-  
-  crons:
-    build:
-      dockerfile: Dockerfile.crons
-    env_file:
-      - docker.env
-    depends_on:
-      - db
-    restart: always
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
-  daemon:
+  scancode-migrate:
     build:
-      dockerfile: Dockerfile.daemon
+      context: ./scancode.io
+    command: >
+      wait-for-it db:5432 -- sh -c "
+        ./manage.py makemigrations &&
+        ./manage.py migrate"
     env_file:
       - docker.env
-    expose:
-      - "8001:8000"
+    environment:
+      GITHUB_APP_PRIVATE_KEY_FILE: /run/secrets/github_app_private_key
+    secrets:
+      - github_app_private_key
     depends_on:
-      - crons
+      db:
+        condition: service_healthy
+    restart: "no"
 
   scancodeio:
     build:
       context: ./scancode.io/
       dockerfile: Dockerfile
     command: wait-for-it --strict --timeout=60 db:5432 -- sh -c "
-        ./manage.py migrate &&
         ./manage.py collectstatic --no-input --verbosity 0 --clear &&
         gunicorn scancodeio.wsgi:application --bind :8000 --timeout 600 --workers 8"
     env_file:
       - docker.env
+    environment:
+      GITHUB_APP_PRIVATE_KEY_FILE: /run/secrets/github_app_private_key
     expose:
       - "8002:8000"
     depends_on:
-      - db
-      - daemon
+      db:
+        condition: service_healthy
+      scancode-migrate:
+        condition: service_completed_successfully
+    secrets:
+      - github_app_private_key
     volumes:
       - static:/var/scancodeio/static/
+
+  daemon:
+    build:
+      dockerfile: Dockerfile.daemon
+    env_file:
+      - docker.env
+    environment:
+      GITHUB_APP_PRIVATE_KEY_FILE: /run/secrets/github_app_private_key
+    expose:
+      - "8001:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      scancode-migrate:
+        condition: service_completed_successfully
+      scancodeio:
+        condition: service_started
+    secrets:
+      - github_app_private_key
+    command: >
+      bash -c 'source venv/bin/activate &&
+      libinv --debug process-message "{\"repository\": {\"url\": \"https://github.com/appsecco/dvja.git\", \"commit\": \"597ece1ab79ffffea7289d49b0c443bb2ebcbd16\", \"tag\": \"597ece1a\"}, \"job_url\": \"https://jenkins/job/XYZ/job/dvja/3/\", \"aws_environment\": \"prod\", \"buildx_enabled\": \"1\", \"ecr_image\": [], \"type\": \"Bridge\", \"timestamp\": \"2025-11-18-05:35:47\"}"'
+
+  crons:
+    build:
+      dockerfile: Dockerfile.crons
+    env_file:
+      - docker.env
+    environment:
+      GITHUB_APP_PRIVATE_KEY_FILE: /run/secrets/github_app_private_key
+    depends_on:
+      db:
+        condition: service_healthy
+      daemon:
+        condition: service_started
+      scancode-migrate:
+        condition: service_completed_successfully
+    secrets:
+      - github_app_private_key
+    restart: always
   
   web:
     build:
@@ -54,32 +104,13 @@ services:
     expose:
       - "8000:5000"
     depends_on:
+      - scancodeio
       - daemon
-
-  metabase:
-    image: metabase/metabase:latest
-    container_name: metabase
-    hostname: metabase
-    volumes:
-      - /dev/urandom:/dev/random:ro
-    ports:
-      - 3000:3000
-    environment:
-      MB_DB_TYPE: postgres
-      MB_DB_DBNAME: libinv
-      MB_DB_PORT: 5432
-      MB_DB_USER: scancodeio
-      MB_DB_PASS: scancodeio
-      MB_DB_HOST: db
-    healthcheck:
-      test: curl --fail -I http://localhost:3000/api/health || exit 1
-      interval: 15s
-      timeout: 5s
-      retries: 5
-    depends_on:
-      - db
-
 
 volumes:
   static:
   db_data:
+
+secrets:
+  github_app_private_key:
+    file: ./etc/secrets/github_app_private_key.pem

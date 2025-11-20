@@ -62,7 +62,10 @@ from libinv.exceptions import ConflictingInfoError
 from libinv.exceptions import MalformedCaterpillarMessage
 from libinv.helpers import case_insensitive_dict
 from libinv.helpers import explode_git_url
-from libinv.scio_models import DiscoveredPackage
+try:
+    from libinv.scio_models import DiscoveredPackage
+except Exception:  # pragma: no cover - fallback for bootstrap when scanpipe tables missing
+    DiscoveredPackage = None
 from libinv.vcs import BitBucketApp
 from libinv.vcs import GitHubApp
 
@@ -298,7 +301,7 @@ class Repository(Base):
 
     def clone(self, target_dir):
         self.vcs.authenticate()
-        self.vcs.clone(self.url, target_dir)
+        return self.vcs.clone(self.url, target_dir)
 
     @classmethod
     def get_by_git_url(cls, git_url):
@@ -651,11 +654,20 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
         logger.debug(f"[*] Cloning {self.repository.url}")
         target_dir = Path(self.project_dir, f"{repository.name}-{commit[:10]}")
         Path(target_dir).mkdir(exist_ok=True)
+        repo = None
         try:
             print("Trying to clone now..", flush=True)
             repo = repository.clone(target_dir)
+            if repo is None:
+                raise ValueError(f"repository.clone() returned None for {repository.url}")
         except GitCommandError as e:
             logger.error(e)
+            self.throw(f"failed to clone repository: {repository.url}")
+            raise
+        except Exception as e:
+            logger.error(f"Unexpected error during clone: {e}")
+            self.throw(f"failed to clone repository: {repository.url} - {str(e)}")
+            raise
         try:
             repo.git.checkout(commit)
         except GitCommandError:
@@ -1207,6 +1219,9 @@ class ActionablePackageAvailableVersion(Base):
         self.vulns_count = vulns_count
 
     def _get_vulnerabilities_count(self):
+        if not self.scancode_project_uuid or DiscoveredPackage is None:
+            return 0
+
         with Session() as session:
             result = (
                 session.query(
@@ -1401,7 +1416,7 @@ class ActionablePackageAvailableVersion(Base):
         Return a set of CVE IDs affecting this package version based on
         scanpipe discovered packages linked via scancode_project_uuid.
         """
-        if not self.scancode_project_uuid:
+        if not self.scancode_project_uuid or DiscoveredPackage is None:
             return set()
 
         discovered_packages = (

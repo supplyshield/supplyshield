@@ -69,7 +69,7 @@ check:
 	@${ACTIVATE}; black --check .
 
 db:
-	${ACTIVATE}; cd src; alembic upgrade head
+	${ACTIVATE}; cd libinv; alembic upgrade head
 
 init:
 	sh init.sh
