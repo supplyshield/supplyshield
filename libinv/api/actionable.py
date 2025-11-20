@@ -25,7 +25,6 @@ from libinv.models import ActionablePackageAvailableVersion
 from libinv.models import Repository
 from libinv.models import Repository_ActionablePackageAvailableVersion
 from libinv.scio_models import DiscoveredPackage
-from libinv.scio_models import VulnerablePath
 
 actionable = Blueprint("actionable", __name__, template_folder="templates")
 
