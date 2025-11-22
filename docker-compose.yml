@@ -74,8 +74,7 @@ services:
     secrets:
       - github_app_private_key
     command: >
-      bash -c 'source venv/bin/activate &&
-      libinv --debug process-message "{\"repository\": {\"url\": \"https://github.com/appsecco/dvja.git\", \"commit\": \"597ece1ab79ffffea7289d49b0c443bb2ebcbd16\", \"tag\": \"597ece1a\"}, \"job_url\": \"https://jenkins/job/XYZ/job/dvja/3/\", \"aws_environment\": \"prod\", \"buildx_enabled\": \"1\", \"ecr_image\": [], \"type\": \"Bridge\", \"timestamp\": \"2025-11-18-05:35:47\"}"'
+      bash -c 'libinv --debug process-message "{\"repository\": {\"url\": \"https://github.com/appsecco/dvja.git\", \"commit\": \"597ece1ab79ffffea7289d49b0c443bb2ebcbd16\", \"tag\": \"597ece1a\"}, \"job_url\": \"https://jenkins/job/XYZ/job/dvja/3/\", \"aws_environment\": \"prod\", \"buildx_enabled\": \"1\", \"ecr_image\": [], \"type\": \"Bridge\", \"timestamp\": \"2025-11-18-05:35:47\"}"'
 
   crons:
     build:

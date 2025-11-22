@@ -43,6 +43,9 @@ ENV PIP_DEFAULT_TIMEOUT=300
 RUN pip install --no-cache-dir --upgrade pip && \
     make install
 
+# Add venv to PATH so we don't need to source activate
+ENV PATH=/app/venv/bin:$PATH
+
 # Set shell for proper script execution
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
