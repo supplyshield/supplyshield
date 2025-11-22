@@ -378,8 +378,8 @@ These jobs run automatically and don't require manual intervention.
 
 The following diagram illustrates the architecture of SupplyShield:
 
-.. image:: ./docs/images/architecture-diagram.png
-   :alt: SupplyShield Architecture
+.. image:: ./docs/images/architecture-simplified.png
+   :alt: SupplyShield Architecture Simplified
    :align: center
 
 👥 Contributors
