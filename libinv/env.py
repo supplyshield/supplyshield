@@ -70,6 +70,6 @@ GITHUB_APP_PRIVATE_KEY_FILE = os.getenv(
 )
 
 BITBUCKET_APP_TOKEN = os.getenv("BITBUCKET_APP_TOKEN")
-LIBINV_SERVER = os.getenv("LIBINV_WEB_URL")
+LIBINV_SERVER = os.getenv("SUPPLYSHIELD_BASE")
 PURLDB_API_URL = os.getenv("PURLDB_API_URL", "")
 JOBS = json.loads(os.getenv("JOBS", "{}"))

@@ -32,6 +32,8 @@ COPY pyproject.toml pylintrc setup.cfg Makefile ./
 COPY /libinv/cli/cli.py ./libinv/cli/
 COPY /libinv/logger.py /libinv/__init__.py ./libinv/
 RUN make python-deps-dev
+# Add venv to PATH so we don't need to source activate
+ENV PATH=/app/venv/bin:$PATH
 USER root
 RUN pip install --no-cache-dir --upgrade boto3 Jinja2 MarkupSafe
 # copy all files
