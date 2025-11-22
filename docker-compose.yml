@@ -83,7 +83,44 @@ services:
     env_file:
       - docker.env
     environment:
-      JOBS: '{"populate_actionable_purl_versions": {"command": "libinv --debug populate-actionable-purl-versions", "timeout": 1400, "interval": 172800}, "update_latest_version_tag": {"command": "libinv update-latest-version-tag", "timeout": 600, "interval": 172800}, "epss_update": {"command": "libinv --debug epss-update --all-actionable-cves", "timeout": 3600, "interval": 86400}, "calculate_package_epss": {"command": "libinv --debug calculate-package-epss", "timeout": 3600, "interval": 86400}, "scan_versions_in_use": {"command": "libinv --debug scan-versions-in-use", "timeout": 3600, "interval": 172800}, "scan_latest_versions": {"command": "libinv --debug scan-latest-versions", "timeout": 3600, "interval": 172800}, "populate_next_safe_versions": {"command": "libinv --debug populate-next-safe-versions", "timeout": 1400, "interval": 172800}}'
+      JOBS: |
+        {
+          "populate_actionable_purl_versions": {
+            "command": "libinv --debug populate-actionable-purl-versions",
+            "timeout": 1400,
+            "interval": 172800
+          },
+          "update_latest_version_tag": {
+            "command": "libinv update-latest-version-tag",
+            "timeout": 600,
+            "interval": 172800
+          },
+          "scan_versions_in_use": {
+            "command": "libinv --debug scan-versions-in-use",
+            "timeout": 3600,
+            "interval": 172800
+          },
+          "scan_latest_versions": {
+            "command": "libinv --debug scan-latest-versions",
+            "timeout": 3600,
+            "interval": 172800
+          },
+          "populate_next_safe_versions": {
+            "command": "libinv --debug populate-next-safe-versions",
+            "timeout": 1400,
+            "interval": 172800
+          },
+          "epss_update": {
+            "command": "libinv --debug epss-update --all-actionable-cves",
+            "timeout": 3600,
+            "interval": 86400
+          },
+          "calculate_package_epss": {
+            "command": "libinv --debug calculate-package-epss",
+            "timeout": 3600,
+            "interval": 86400
+          }
+        }
     depends_on:
       db:
         condition: service_healthy
@@ -92,7 +129,28 @@ services:
       scancode-migrate:
         condition: service_completed_successfully
     restart: always
-  
+
+  purldb:
+    build:
+      context: ./purldb
+    command: |
+      wait-for-it --strict --timeout=60 db:5432 -- bash -c "
+        python /opt/supplyshield/scripts/create_packagedb.py &&
+        python manage_purldb.py migrate &&
+        python manage_purldb.py collectstatic --no-input --verbosity 0 --clear &&
+        gunicorn purldb_project.wsgi:application --bind :8000 --timeout 600 --workers 8"
+    env_file:
+      - docker.env
+      - ./purldb/docker_purldb.env
+    ports:
+      - "8003:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+    volumes:
+      - purldb_static:/var/purldb/static/
+      - ./etc/scripts:/opt/supplyshield/scripts:ro
+
   web:
     build:
       dockerfile: Dockerfile
@@ -107,7 +165,7 @@ services:
 volumes:
   static:
   db_data:
-
+  purldb_static:
 secrets:
   github_app_private_key:
     file: ./etc/secrets/github_app_private_key.pem

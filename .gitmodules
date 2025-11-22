@@ -5,3 +5,6 @@
 	path = scancode.io
 	url = https://github.com/supplyshield/scancode.io
 	branch = master
+[submodule "purldb"]
+	path = purldb
+	url = https://github.com/aboutcode-org/purldb.git
