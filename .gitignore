@@ -69,5 +69,4 @@ blacklist.json
 docs/source/*
 docs/_build/*
 !docs/source/.gitkeep
-alembic/
 .coverage

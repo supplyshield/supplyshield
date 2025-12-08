@@ -1,3 +1,10 @@
 [submodule "scancodeio"]
 	path = scancodeio
 	url = git@github-personal:supplyshield/scancodeio.git
+[submodule "scancode.io"]
+	path = scancode.io
+	url = https://github.com/supplyshield/scancode.io
+	branch = master
+[submodule "purldb"]
+	path = purldb
+	url = https://github.com/aboutcode-org/purldb.git

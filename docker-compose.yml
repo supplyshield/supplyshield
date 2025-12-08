@@ -1,45 +1,155 @@
 services:
   db:
-    image: postgres:15.5
+    image: postgres:15
     env_file:
       - docker.env
     volumes:
-      - ./alembic/data/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./etc/initdb:/docker-entrypoint-initdb.d
       - db_data:/var/lib/postgresql/data
     shm_size: "1gb"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U scancodeio"]
-      interval: 10s
-      retries: 5
     restart: always
-  
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  scancode-migrate:
+    build:
+      context: ./scancode.io
+    command: >
+      wait-for-it db:5432 -- sh -c "
+        ./manage.py migrate"
+    env_file:
+      - docker.env
+    environment:
+      GITHUB_APP_PRIVATE_KEY_FILE: /run/secrets/github_app_private_key
+    secrets:
+      - github_app_private_key
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+
+  scancodeio:
+    build:
+      context: ./scancode.io/
+      dockerfile: Dockerfile
+    command: wait-for-it --strict --timeout=60 db:5432 -- sh -c "
+        ./manage.py collectstatic --no-input --verbosity 0 --clear &&
+        gunicorn scancodeio.wsgi:application --bind :8000 --timeout 600 --workers 8"
+    env_file:
+      - docker.env
+    environment:
+      GITHUB_APP_PRIVATE_KEY_FILE: /run/secrets/github_app_private_key
+    ports:
+      - "8002:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      scancode-migrate:
+        condition: service_completed_successfully
+    secrets:
+      - github_app_private_key
+    volumes:
+      - static:/var/scancodeio/static/
+
+  daemon:
+    build:
+      dockerfile: Dockerfile.daemon
+    env_file:
+      - docker.env
+    environment:
+      GITHUB_APP_PRIVATE_KEY_FILE: /run/secrets/github_app_private_key
+    ports:
+      - "8001:8000"
+    depends_on:
+      db:
+        condition: service_healthy
+      scancode-migrate:
+        condition: service_completed_successfully
+      scancodeio:
+        condition: service_started
+    secrets:
+      - github_app_private_key
+    command: >
+      bash -c 'libinv --debug process-message "{\"repository\": {\"url\": \"https://github.com/appsecco/dvja.git\", \"commit\": \"597ece1ab79ffffea7289d49b0c443bb2ebcbd16\", \"tag\": \"597ece1a\"}, \"job_url\": \"https://jenkins/job/XYZ/job/dvja/3/\", \"aws_environment\": \"prod\", \"buildx_enabled\": \"1\", \"ecr_image\": [], \"type\": \"Bridge\", \"timestamp\": \"2025-11-18-05:35:47\"}"'
+
   crons:
     build:
       dockerfile: Dockerfile.crons
     env_file:
       - docker.env
+    environment:
+      JOBS: |
+        {
+          "populate_actionable_purl_versions": {
+            "command": "libinv --debug populate-actionable-purl-versions",
+            "timeout": 1400,
+            "interval": 172800
+          },
+          "update_latest_version_tag": {
+            "command": "libinv update-latest-version-tag",
+            "timeout": 600,
+            "interval": 172800
+          },
+          "scan_versions_in_use": {
+            "command": "libinv --debug scan-versions-in-use",
+            "timeout": 3600,
+            "interval": 172800
+          },
+          "scan_latest_versions": {
+            "command": "libinv --debug scan-latest-versions",
+            "timeout": 3600,
+            "interval": 172800
+          },
+          "populate_next_safe_versions": {
+            "command": "libinv --debug populate-next-safe-versions",
+            "timeout": 1400,
+            "interval": 172800
+          },
+          "epss_update": {
+            "command": "libinv --debug epss-update --all-actionable-cves",
+            "timeout": 3600,
+            "interval": 86400
+          },
+          "calculate_package_epss": {
+            "command": "libinv --debug calculate-package-epss",
+            "timeout": 3600,
+            "interval": 86400
+          }
+        }
     depends_on:
-      - db
+      db:
+        condition: service_healthy
+      daemon:
+        condition: service_started
+      scancode-migrate:
+        condition: service_completed_successfully
     restart: always
 
-  scancodeio:
+  purldb:
     build:
-      context: ./scancodeio/
-      dockerfile: Dockerfile
-    command: wait-for-it --strict --timeout=60 db:5432 -- sh -c "
-        ./manage.py migrate &&
-        ./manage.py collectstatic --no-input --verbosity 0 --clear &&
-        gunicorn scancodeio.wsgi:application --bind :8000 --timeout 600 --workers 8"
+      context: ./purldb
+    command: |
+      wait-for-it --strict --timeout=60 db:5432 -- bash -c "
+        python /opt/supplyshield/scripts/create_packagedb.py &&
+        python manage_purldb.py migrate &&
+        python manage_purldb.py collectstatic --no-input --verbosity 0 --clear &&
+        gunicorn purldb_project.wsgi:application --bind :8000 --timeout 600 --workers 8"
     env_file:
       - docker.env
+      - ./purldb/docker_purldb.env
     ports:
-      - "8002:8000"
+      - "8003:8000"
     depends_on:
-      - db
-      - crons
+      db:
+        condition: service_healthy
     volumes:
-      - static:/var/scancodeio/static/
-  
+      - purldb_static:/var/purldb/static/
+      - ./etc/scripts:/opt/supplyshield/scripts:ro
+
   web:
     build:
       dockerfile: Dockerfile
@@ -49,40 +159,12 @@ services:
       - "8000:5000"
     depends_on:
       - scancodeio
-
-  metabase:
-    image: metabase/metabase:latest
-    container_name: metabase
-    hostname: metabase
-    volumes:
-      - /dev/urandom:/dev/random:ro
-    ports:
-      - 3000:3000
-    environment:
-      MB_DB_TYPE: postgres
-      MB_DB_DBNAME: scancodeio
-      MB_DB_PORT: 5432
-      MB_DB_USER: scancodeio
-      MB_DB_PASS: 
-      MB_DB_HOST: db
-    healthcheck:
-      test: curl --fail -I http://localhost:3000/api/health || exit 1
-      interval: 15s
-      timeout: 5s
-      retries: 5
-    depends_on:
-      - db
-
-  daemon:
-    build:
-      dockerfile: Dockerfile.daemon
-    env_file:
-      - docker.env
-    expose:
-      - "8001:8000"
-    depends_on:
-      - crons
+      - daemon
 
 volumes:
   static:
   db_data:
+  purldb_static:
+secrets:
+  github_app_private_key:
+    file: ./etc/secrets/github_app_private_key.pem
