@@ -1,0 +1,57 @@
+body {
+    font-family: 'Roboto', sans-serif;
+}
+
+.navbar-brand {
+    margin-left: 20px;
+}
+
+.logo {
+    color: #34a853;
+}
+
+/* Navbar brand link styling */
+.navbar-brand {
+    text-decoration: none;
+    transition: all 0.2s ease;
+}
+
+.navbar-brand:hover {
+    transform: translateY(-1px);
+    text-decoration: none;
+}
+
+.navbar-brand:hover .logo {
+    color: #22c55e !important;
+    text-shadow: 0 2px 4px rgba(34, 197, 94, 0.3);
+}
+
+li {
+    list-style-type: none;
+}
+
+.highlight-diff {
+    background-color: lightcoral;
+}
+
+.card-header {
+    font-weight: bold;
+}
+
+.placeholder {
+    font-style: italic;
+    color: #6c757d;
+}
+
+.has_vulnerability{
+    color: red;
+}
+
+.has_vulnerability::after {
+    content: " ⚠️";
+    color: red;
+}
+
+.has_vulnerability:hover::after {
+    content: " ⚠️";
+}

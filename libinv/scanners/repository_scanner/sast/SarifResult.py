@@ -124,6 +124,9 @@ class SarifResult:
             key = self.make_memo_key(pod, subpod, submodule)
 
             if record:
+                if isinstance(record.extras, str):
+                    record.extras = json.load(record.extras)
+
                 if extras["public_endpoints"] == record.extras["public_endpoints"]:
                     continue
                 else:
@@ -136,7 +139,7 @@ class SarifResult:
 
             record = SastResult(
                 id=fingerprint,
-                extras=json.dumps(extras),
+                extras=extras,
                 lob_id=str(self.memo_lob_id[key]),
                 vulnsnippet=str(
                     sarif_row["locations"][0]["physicalLocation"]["region"]["snippet"]["text"]

@@ -86,7 +86,7 @@ def connect_using_queue_message_agreement(wasp: Wasp):
 
         account_id, _, _ = ecr_image["name"].partition(".")
         _, _, image_name = ecr_image["name"].rpartition("/")
-        platform = f'{ecr_image["platform"]["os"]}/{ecr_image["platform"]["architecture"]}'
+        platform = f"{ecr_image['platform']['os']}/{ecr_image['platform']['architecture']}"
         Account.ensure_exists(account_id=account_id, name=message["aws_environment"])
         connect(
             wasp=wasp,

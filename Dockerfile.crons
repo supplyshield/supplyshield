@@ -1,4 +1,4 @@
-FROM python:3.10-buster
+FROM python:3.13-bookworm
 
 WORKDIR /app
 # hadolint ignore=DL3008,DL4006
@@ -9,7 +9,6 @@ RUN apt-get update && \
     zip \
     python3-pip \
     python3-dev \
-    default-libmysqlclient-dev \
     build-essential \
     ca-certificates \
     curl \
@@ -29,10 +28,12 @@ RUN apt-get update && \
 EXPOSE 8000
 # copying all files required to install
 COPY /etc ./etc
-COPY requirements.txt pyproject.toml pylintrc setup.cfg Makefile ./
+COPY pyproject.toml pylintrc setup.cfg Makefile ./
 COPY /libinv/cli/cli.py ./libinv/cli/
 COPY /libinv/logger.py /libinv/__init__.py ./libinv/
 RUN make python-deps-dev
+# Add venv to PATH so we don't need to source activate
+ENV PATH=/app/venv/bin:$PATH
 USER root
 RUN pip install --no-cache-dir --upgrade boto3 Jinja2 MarkupSafe
 # copy all files

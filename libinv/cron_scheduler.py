@@ -5,48 +5,57 @@ import time
 
 import schedule
 
+from libinv.env import JOBS
+
 logging.basicConfig(
     level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 
 logger = logging.getLogger("libinv.cron-scheduler")
 
-JOBS = {
-    "sync_metapod": {
-        "command": "libinv --debug import-and-improve-from-metapod",
-        "timeout": 600,
-        "interval": 600,
-    },
-    "sync_jira": {
-        "command": "libinv --debug secbugs-connect",
-        "timeout": 600,
-        "interval": 600,
-    },
-    "sync_metabase": {
-        "command": "/app/etc/scripts/metabase_cron.sh",
-        "timeout": 600,
-        "interval": 300,
-    },
-}
+JOBS = JOBS
 
 
 def execute_command(command, timeout):
+    logger.debug(f"Executing command: {command}")
     try:
         process = subprocess.Popen(
             command,
             shell=True,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.STDOUT,  # Merge stderr with stdout for real-time output
+            universal_newlines=True,
+            bufsize=1,  # Line buffered
             env=dict(os.environ),
         )
-        stdout, stderr = process.communicate(timeout=timeout)
 
-        logger.debug(f"Output: {command}")
-        logger.debug(f"Stdout: {stdout.decode().strip()}")
-        logger.debug(f"Stderr: {stderr.decode().strip()}")
-    except subprocess.TimeoutExpired:
-        process.kill()
-        logger.error(f"Failed: {command} timed out after {timeout} seconds.")
+        # Read output line by line in real-time
+        start_time = time.time()
+        while True:
+            output = process.stdout.readline()
+            if output == "" and process.poll() is not None:
+                break
+            if output:
+                # Log each line immediately as it's received
+                logger.info(f"[{command.split()[0]}] {output.strip()}")
+
+            # Check for timeout
+            if time.time() - start_time > timeout:
+                process.kill()
+                logger.error(f"Failed: {command} timed out after {timeout} seconds.")
+                return
+
+        # Wait for process to complete and get return code
+        return_code = process.poll()
+        if return_code == 0:
+            logger.debug(f"Command completed successfully: {command}")
+        else:
+            logger.error(f"Command failed with return code {return_code}: {command}")
+
+    except Exception as e:
+        logger.error(f"Error executing command '{command}': {e}")
+        if "process" in locals():
+            process.kill()
 
 
 def run_all_once():

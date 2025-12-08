@@ -1,0 +1,311 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Package Details - {{ package_info.name }}</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='actionables-dashboard.css') }}">
+</head>
+
+<body>
+    {% include 'includes/navbar.html' %}
+
+    <div class="page-header">
+        <div class="container-fluid px-4">
+            <h1 class="page-title">Package Details</h1>
+            <p class="page-subtitle">CVE and EPSS score analysis for {{ package_info.name }}@{{ package_info.version }}</p>
+        </div>
+    </div>
+
+    <div class="container-fluid px-4">
+        <!-- Back to Dashboard Button -->
+        <div class="mb-4">
+            <a href="javascript:history.back()" class="btn download-btn">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                    <path d="m15 18-6-6 6-6"/>
+                </svg>
+                Back to Dashboard
+            </a>
+        </div>
+
+        <!-- Package Information Card -->
+        <div class="alert alert-info mb-4">
+            <h5 class="mb-3"><strong>Package Information</strong></h5>
+            <div class="row">
+                <div class="col-md-3">
+                    <strong>Name:</strong><br>
+                    <span class="package-name">{{ package_info.name }}</span>
+                </div>
+                <div class="col-md-2">
+                    <strong>Version:</strong><br>
+                    <span class="version-badge">{{ package_info.version }}</span>
+                </div>
+                <div class="col-md-2">
+                    <strong>Type:</strong><br>
+                    <span class="package-type">{{ package_info.type }}</span>
+                </div>
+                <div class="col-md-3">
+                    <strong>Namespace:</strong><br>
+                    <span class="package-namespace">{{ package_info.namespace or "N/A" }}</span>
+                </div>
+                <div class="col-md-2">
+                    <strong>Max EPSS:</strong><br>
+                    {% if package_stats.max_epss_score > 0 %}
+                    <span class="priority-badge {% if package_stats.max_epss_score > 0.8 %}p0{% elif package_stats.max_epss_score > 0.7 %}p1{% elif package_stats.max_epss_score > 0.5 %}p2{% else %}p3{% endif %}">
+                        {{ "%.1f" | format(package_stats.max_epss_score * 100) }}%
+                    </span>
+                    {% else %}
+                    <span class="text-muted">N/A</span>
+                    {% endif %}
+                </div>
+            </div>
+            <div class="mt-3">
+                <small class="text-muted d-block">
+                    <strong>Full Package URL:</strong> {{ package_info.full_url }}
+                </small>
+            </div>
+        </div>
+
+
+
+        <!-- Statistics Cards -->
+        <div class="row mb-4">
+            <div class="col-md-2">
+                <div class="stats-card">
+                    <div class="stats-label">Total CVEs</div>
+                    <div class="stats-number">{{ package_stats.total_cves }}</div>
+                    <div class="stats-description">Vulnerabilities found</div>
+                </div>
+            </div>
+            <div class="col-md-2">
+                <div class="stats-card">
+                    <div class="stats-label" style="color: var(--critical);">Critical</div>
+                    <div class="stats-number" style="color: var(--critical);">{{ package_stats.critical_cves }}</div>
+                    <div class="stats-description">EPSS > 0.8</div>
+                </div>
+            </div>
+            <div class="col-md-2">
+                <div class="stats-card">
+                    <div class="stats-label" style="color: var(--high);">High</div>
+                    <div class="stats-number" style="color: var(--high);">{{ package_stats.high_cves }}</div>
+                    <div class="stats-description">EPSS > 0.7</div>
+                </div>
+            </div>
+            <div class="col-md-2">
+                <div class="stats-card">
+                    <div class="stats-label" style="color: var(--medium);">Medium</div>
+                    <div class="stats-number" style="color: var(--medium);">{{ package_stats.medium_cves }}</div>
+                    <div class="stats-description">EPSS > 0.5</div>
+                </div>
+            </div>
+            <div class="col-md-2">
+                <div class="stats-card">
+                    <div class="stats-label" style="color: var(--low);">Low</div>
+                    <div class="stats-number" style="color: var(--low);">{{ package_stats.low_cves }}</div>
+                    <div class="stats-description">EPSS ≤ 0.5</div>
+                </div>
+            </div>
+            <div class="col-md-2">
+                <div class="stats-card">
+                    <div class="stats-label">Avg EPSS</div>
+                    <div class="stats-number">{{ "%.3f" | format(package_stats.avg_epss_score) }}</div>
+                    <div class="stats-description">Average score</div>
+                </div>
+            </div>
+        </div>
+
+        {% if not cve_details %}
+        <div class="no-actionables">
+            <div class="success-icon">ℹ</div>
+            <h5>No CVE information found</h5>
+            <p class="text-muted mb-0">
+                No vulnerability data is available for this package version.
+            </p>
+        </div>
+        {% else %}
+
+        <!-- CVE Details Table -->
+        <div class="priority-section">
+            <div class="priority-header" style="background-color: var(--primary-blue); border-color: var(--primary-blue); color: white;">
+                <span>CVE Details</span>
+                <span>{{ cve_details | length }} vulnerabilities</span>
+            </div>
+            
+            <table class="table priority-table">
+                <thead>
+                    <tr>
+                        <th width="15%">CVE ID</th>
+                        <th width="10%">Exploitability</th>
+                        <th width="10%">Percentile</th>
+                        <th width="10%">Priority</th>
+                        <th width="12%">EPSS Date</th>
+                        <th width="43%">Affected Components</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for cve in cve_details %}
+                    <tr>
+                        <td>
+                            <a href="https://cve.mitre.org/cgi-bin/cvename.cgi?name={{ cve.cve }}" 
+                               target="_blank" class="text-decoration-none">
+                                <strong>{{ cve.cve }}</strong>
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="margin-left: 4px;">
+                                    <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
+                                    <polyline points="15,3 21,3 21,9"/>
+                                    <line x1="10" y1="14" x2="21" y2="3"/>
+                                </svg>
+                            </a>
+                        </td>
+                        <td>
+                            {% if cve.epss_score is not none %}
+                            <span class="font-monospace">{{ "%.1f" | format(cve.epss_score * 100) }}%</span>
+                            {% else %}
+                            <span class="text-muted">N/A</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if cve.epss_percentile is not none %}
+                            <span class="font-monospace">{{ "%.4f" | format(cve.epss_percentile) }}</span>
+                            {% else %}
+                            <span class="text-muted">N/A</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if cve.epss_score is not none %}
+                            <span class="priority-badge {% if cve.epss_score > 0.8 %}p0{% elif cve.epss_score > 0.7 %}p1{% elif cve.epss_score > 0.5 %}p2{% else %}p3{% endif %}">
+                                {% if cve.epss_score > 0.8 %}Critical{% elif cve.epss_score > 0.7 %}High{% elif cve.epss_score > 0.5 %}Medium{% else %}Low{% endif %}
+                            </span>
+                            {% else %}
+                            <span class="badge bg-secondary">Unknown</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if cve.epss_date %}
+                            <small class="text-muted">{{ cve.epss_date }}</small>
+                            {% else %}
+                            <span class="text-muted">N/A</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            {% if cve.sources %}
+                            <div class="cve-sources">
+                                {% for source in cve.sources %}
+                                <div class="source-item mb-1">
+                                    <small class="package-name">{{ source.package_name }}</small>
+                                    {% if source.package_version != "Unknown" %}
+                                    <small class="version-badge ms-1">{{ source.package_version }}</small>
+                                    {% endif %}
+                                </div>
+                                {% endfor %}
+                            </div>
+                            {% else %}
+                            <span class="text-muted">No source information</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        {% endif %}
+
+        <!-- Repository Usage Section -->
+        {% if repositories_using_package %}
+        <div class="priority-section">
+            <div class="priority-header" style="background-color: var(--primary-blue); border-color: var(--primary-blue); color: white;">
+                <span>Repository Usage</span>
+                <span>{{ repositories_using_package | length }} repositories using this package</span>
+            </div>
+            <table class="priority-table">
+                <thead>
+                    <tr>
+                        <th width="40%">Repository</th>
+                        <th width="20%">Organization</th>
+                        <th width="15%">Environment</th>
+                        <th width="15%">Pod</th>
+                        <th width="10%">Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for repo in repositories_using_package %}
+                    <tr>
+                        <td>
+                            <div class="d-flex flex-column">
+                                <a href="/actionable/v3/?repository_id={{ repo.id }}&env={{ repo.environment }}" class="package-name-link">
+                                    <strong class="package-name">{{ repo.name }}</strong>
+                                </a>
+                                <small class="text-muted">{{ repo.provider }}/{{ repo.org }}/{{ repo.name }}</small>
+                            </div>
+                        </td>
+                        <td>
+                            <strong class="organization-name">{{ repo.org }}</strong>
+                        </td>
+                        <td>
+                            <span class="badge bg-primary">{{ repo.environment }}</span>
+                        </td>
+                        <td>
+                            {% if repo.pod %}
+                            <span class="badge bg-secondary">{{ repo.pod }}</span>
+                            {% else %}
+                            <span class="text-muted">N/A</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <a href="/actionable/v3/?repository_id={{ repo.id }}&env={{ repo.environment }}" class="btn-simple success">
+                                View Dashboard
+                            </a>
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        {% endif %}
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+
+    <style>
+        .font-monospace {
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace !important;
+        }
+        
+        .cve-sources {
+            max-height: 100px;
+            overflow-y: auto;
+        }
+        
+        .source-item {
+            padding: 0.125rem 0;
+            border-bottom: 1px solid var(--border-light);
+        }
+        
+        .source-item:last-child {
+            border-bottom: none;
+        }
+        
+        .source-item .version-badge {
+            font-size: 0.6rem;
+            padding: 0.125rem 0.25rem;
+        }
+        
+        .source-item .package-name {
+            font-size: 0.75rem;
+        }
+        
+        /* External link styling */
+        td a[target="_blank"] {
+            color: var(--primary-blue);
+            transition: color 0.15s ease;
+        }
+        
+        td a[target="_blank"]:hover {
+            color: var(--primary-blue-light);
+        }
+    </style>
+</body>
+
+</html>

@@ -6,6 +6,7 @@ include = '\.pyi?$'
 extend-exclude = '''
 (
    ^/venv/.*
+   | ^/alembic/.*
 )
 '''
 
@@ -13,15 +14,24 @@ extend-exclude = '''
 profile = "black"
 line_length = 100
 force_single_line = true
-skip = ["venv", "scans"]
+skip = ["venv", "scans", "alembic"]
 
 [tool.ruff]
 line-length = 100
-ignore-init-module-imports = true
+exclude = [
+    "alembic/*"
+]
 
-[tool.ruff.isort]
+[tool.ruff.lint.isort]
 force-single-line = true
 
-[tool.ruff.per-file-ignores]
-"alembic/versions/*.py" = ["F401"]
+[tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
+
+[tool.uv.sources]
+libinv = { workspace = true }
+
+[dependency-groups]
+dev = [
+    "libinv",
+]

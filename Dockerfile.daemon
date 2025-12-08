@@ -1,58 +1,86 @@
-FROM python:3.10-buster
+FROM python:3.13-bookworm
 
 WORKDIR /app
-# hadolint ignore=DL3008,DL4006
-RUN curl -fsSL https://deb.nodesource.com/setup_current.x | bash -
-RUN apt-get update && \
-    apt-get install -y python3 \
-    unzip \
-    zip \
-    python3-pip \
-    python3-dev \
-    default-libmysqlclient-dev \
-    build-essential \
-    ca-certificates \
-    curl \
-    wget \
-    nodejs \
-    gnupg \
-    lsb-release \
-    libpq-dev \
-    git \
-    postgresql-client \ 
-    jq \
-    wait-for-it \
-    --no-install-recommends \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/* && \
+
+# 1. Install all system dependencies and node/npm in a single layer
+RUN curl -fsSL https://deb.nodesource.com/setup_current.x | bash - && \
+    apt-get update && \
+    apt-get install -y \
+        python3 \
+        unzip \
+        zip \
+        python3-pip \
+        python3-dev \
+        build-essential \
+        ca-certificates \
+        curl \
+        wget \
+        nodejs \
+        gnupg \
+        lsb-release \
+        libpq-dev \
+        git \
+        postgresql-client \
+        jq \
+        wait-for-it \
+        --no-install-recommends && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/* && \
     npm install npm@latest -g
+
 EXPOSE 8000
-# copying all files required to install
-COPY /etc ./etc
-COPY requirements.txt pyproject.toml pylintrc setup.cfg Makefile ./
-COPY /libinv/cli/cli.py ./libinv/cli/
-COPY /libinv/logger.py /libinv/__init__.py ./libinv/
-RUN make install
-SHELL ["/bin/bash", "-c"]
-RUN curl -s "https://get.sdkman.io" | bash
+
+# 2. Copy all files needed for dependency installation in one step
+COPY pyproject.toml setup.cfg Makefile pylintrc ./
+COPY etc ./etc
+COPY libinv/cli/cli.py ./libinv/cli/
+COPY libinv/logger.py libinv/__init__.py ./libinv/
+
+# 3. Install Python dependencies with network timeout handling
+ENV PIP_TIMEOUT=300
+ENV PIP_RETRIES=5
+ENV PIP_DEFAULT_TIMEOUT=300
+RUN pip install --no-cache-dir --upgrade pip && \
+    make install
+
+# Add venv to PATH so we don't need to source activate
+ENV PATH=/app/venv/bin:$PATH
+
+# Set shell for proper script execution
+SHELL ["/bin/bash", "-o", "pipefail", "-c"]
+
+# 4. Install SDKMAN and Java versions
+RUN curl -s "https://get.sdkman.io" | bash && \
+    chmod +x "$HOME/.sdkman/bin/sdkman-init.sh"
+
+# 5. Install Java versions using SDKMAN
 RUN source "$HOME/.sdkman/bin/sdkman-init.sh" && \
     sdk install java 19.0.2-zulu && \
     sdk install java 8.0.412-amzn && \
     sdk install java 11.0.23-amzn && \
     sdk install java 17.0.11-amzn && \
     sdk install java 21.0.2-amzn && \
-    sdk install maven 3.9.8 && \
-    curl -fsSL https://bazel.build/bazel-release.pub.gpg | gpg --dearmor >bazel-archive-keyring.gpg && \
+    sdk install maven 3.9.8
+
+# 6. Install Bazel and other tools
+RUN curl -fsSL https://bazel.build/bazel-release.pub.gpg | gpg --dearmor > bazel-archive-keyring.gpg && \
     mv bazel-archive-keyring.gpg /usr/share/keyrings && \
     echo "deb [arch=amd64 signed-by=/usr/share/keyrings/bazel-archive-keyring.gpg] https://storage.googleapis.com/bazel-apt stable jdk1.8" | tee /etc/apt/sources.list.d/bazel.list && \
-    apt update && \
-    apt install -y bazel \
-        openssh-client && \
-    wget https://go.dev/dl/go1.22.4.linux-amd64.tar.gz && \
-    tar -C /usr/local -xzf go1.22.4.linux-amd64.tar.gz
-ENV PATH $PATH:/usr/local/go/bin
-ENV PATH $PATH:$HOME/.sdkman/candidates/maven/3.9.8/bin/
-# copy all files
+    apt-get update && \
+    apt-get install -y bazel openssh-client --no-install-recommends && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
+
+# 7. Install Go
+RUN curl -fsSL https://go.dev/dl/go1.22.4.linux-amd64.tar.gz -o go1.22.4.linux-amd64.tar.gz && \
+    tar -C /usr/local -xzf go1.22.4.linux-amd64.tar.gz && \
+    rm go1.22.4.linux-amd64.tar.gz
+
+ENV PATH=/usr/local/go/bin:/root/.sdkman/candidates/maven/3.9.8/bin/:$PATH
+
+# 5. Copy the rest of the source tree LAST, so source code changes don't bust dependency layer cache
 COPY . .
+
 RUN chmod -R 777 /app
-CMD ["make","run"]
+
+CMD ["make", "run"]
