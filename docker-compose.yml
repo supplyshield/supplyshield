@@ -16,6 +16,7 @@ services:
       start_period: 10s
 
   scancode-migrate:
+    platform: linux/amd64 
     build:
       context: ./scancode.io
     command: >
@@ -33,6 +34,7 @@ services:
     restart: "no"
 
   scancodeio:
+    platform: linux/amd64 
     build:
       context: ./scancode.io/
       dockerfile: Dockerfile
@@ -56,6 +58,7 @@ services:
       - static:/var/scancodeio/static/
 
   daemon:
+    platform: linux/amd64 
     build:
       dockerfile: Dockerfile.daemon
     env_file:
@@ -77,6 +80,7 @@ services:
       bash -c 'libinv --debug process-message "{\"repository\": {\"url\": \"https://github.com/appsecco/dvja.git\", \"commit\": \"597ece1ab79ffffea7289d49b0c443bb2ebcbd16\", \"tag\": \"597ece1a\"}, \"job_url\": \"https://jenkins/job/XYZ/job/dvja/3/\", \"aws_environment\": \"prod\", \"buildx_enabled\": \"1\", \"ecr_image\": [], \"type\": \"Bridge\", \"timestamp\": \"2025-11-18-05:35:47\"}"'
 
   crons:
+    platform: linux/amd64 
     build:
       dockerfile: Dockerfile.crons
     env_file:
@@ -130,6 +134,7 @@ services:
     restart: always
 
   purldb:
+    platform: linux/amd64
     build:
       context: ./purldb
     command: |
@@ -151,6 +156,7 @@ services:
       - ./etc/scripts:/opt/supplyshield/scripts:ro
 
   web:
+    platform: linux/amd64
     build:
       dockerfile: Dockerfile
     env_file:

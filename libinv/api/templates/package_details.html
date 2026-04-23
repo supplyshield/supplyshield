@@ -137,7 +137,7 @@
                 <thead>
                     <tr>
                         <th width="15%">CVE ID</th>
-                        <th width="10%">Exploitability</th>
+                        <th width="10%">EPSS Score</th>
                         <th width="10%">Percentile</th>
                         <th width="10%">Priority</th>
                         <th width="12%">EPSS Date</th>
@@ -174,8 +174,12 @@
                         </td>
                         <td>
                             {% if cve.epss_score is not none %}
-                            <span class="priority-badge {% if cve.epss_score > 0.8 %}p0{% elif cve.epss_score > 0.7 %}p1{% elif cve.epss_score > 0.5 %}p2{% else %}p3{% endif %}">
+                            <span class="priority-badge {% if cve.epss_score > 0.8 %}p0{% elif cve.epss_score > 0.7 %}p1{% elif cve.epss_score > 0.5 %}p2{% else %}p3{% endif %}" title="EPSS-based classification">
                                 {% if cve.epss_score > 0.8 %}Critical{% elif cve.epss_score > 0.7 %}High{% elif cve.epss_score > 0.5 %}Medium{% else %}Low{% endif %}
+                            </span>
+                            {% elif cve.cvss_score is not none %}
+                            <span class="priority-badge {% if cve.cvss_score >= 9.0 %}p0{% elif cve.cvss_score >= 7.0 %}p1{% elif cve.cvss_score >= 4.0 %}p2{% else %}p3{% endif %}" title="CVSS-based classification (fallback)">
+                                {% if cve.cvss_score >= 9.0 %}Critical{% elif cve.cvss_score >= 7.0 %}High{% elif cve.cvss_score >= 4.0 %}Medium{% else %}Low{% endif %}
                             </span>
                             {% else %}
                             <span class="badge bg-secondary">Unknown</span>
