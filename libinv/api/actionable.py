@@ -67,12 +67,12 @@ def actionables_v2():
             ):
                 continue
 
-            latest_version = package.available_version.actionable.get_latest()
+            latest_version = package.available_version.actionable.get_latest(session)
 
             secure_versions = None
             secure_versions = [
                 package.version
-                for package in package.available_version.actionable.get_safe_versions()
+                for package in package.available_version.actionable.get_safe_versions(session)
             ]
 
             try:
@@ -163,12 +163,12 @@ def actionables_v3():
             ):
                 continue
 
-            latest_version = package.available_version.actionable.get_latest()
+            latest_version = package.available_version.actionable.get_latest(session)
 
             secure_versions = None
             secure_versions = [
                 package.version
-                for package in package.available_version.actionable.get_safe_versions()
+                for package in package.available_version.actionable.get_safe_versions(session)
             ]
 
             try:
@@ -351,6 +351,7 @@ def package_details():
                         "epss_date": epss_record.epss_date if epss_record else None,
                         "updated_at": epss_record.updated_at if epss_record else None,
                         "sources": cve_sources.get(cve, []),
+                        "cvss_score": None,  # Will be populated later
                     }
                     cve_details.append(cve_detail)
 
@@ -394,6 +395,63 @@ def package_details():
                 for repo in repo_usage
             ]
 
+        # Add CVSS scores to CVE details for consistent classification
+        for cve_detail in cve_details:
+            cve = cve_detail["cve"]
+            cve_detail["cvss_score"] = None
+
+            # Try to get CVSS score from vulnerability data if no EPSS
+            if not cve_detail["epss_score"]:
+                for source in cve_detail.get("sources", []):
+                    try:
+                        vuln_data = source.get("vulnerability_data", {})
+                        cvss_data = vuln_data.get("cvss", [])
+                        if cvss_data and isinstance(cvss_data, list) and len(cvss_data) > 0:
+                            cvss_metrics = cvss_data[0].get("metrics", {})
+                            cvss_score = cvss_metrics.get("baseScore")
+                            if cvss_score:
+                                cve_detail["cvss_score"] = cvss_score
+                                break
+                    except (AttributeError, TypeError, KeyError):
+                        continue
+
+        def classify_severity_for_stats(cve_detail):
+            """Classify severity based on EPSS score with CVSS fallback"""
+            epss_score = cve_detail.get("epss_score")
+            cvss_score = cve_detail.get("cvss_score")
+
+            # Primary: Use EPSS score if available
+            if epss_score is not None:
+                if epss_score > 0.8:
+                    return "critical"
+                elif epss_score > 0.7:
+                    return "high"
+                elif epss_score > 0.5:
+                    return "medium"
+                else:
+                    return "low"
+
+            # Fallback: Use CVSS score if available
+            elif cvss_score is not None:
+                if cvss_score >= 9.0:
+                    return "critical"
+                elif cvss_score >= 7.0:
+                    return "high"
+                elif cvss_score >= 4.0:
+                    return "medium"
+                elif cvss_score > 0:
+                    return "low"
+
+            # No score available
+            return "unknown"
+
+        # Calculate severity counts using consistent classification
+        classified_severities = [classify_severity_for_stats(cve) for cve in cve_details]
+        critical_count = len([s for s in classified_severities if s == "critical"])
+        high_count = len([s for s in classified_severities if s == "high"])
+        medium_count = len([s for s in classified_severities if s == "medium"])
+        low_count = len([s for s in classified_severities if s == "low"])
+
         package_stats = {
             "total_cves": len(cve_details),
             "cves_with_epss": len([c for c in cve_details if c["epss_score"] is not None]),
@@ -406,16 +464,10 @@ def package_details():
                 if cve_details
                 else 0
             ),
-            "critical_cves": len(
-                [c for c in cve_details if c["epss_score"] and c["epss_score"] > 0.8]
-            ),
-            "high_cves": len(
-                [c for c in cve_details if c["epss_score"] and 0.7 < c["epss_score"] <= 0.8]
-            ),
-            "medium_cves": len(
-                [c for c in cve_details if c["epss_score"] and 0.5 < c["epss_score"] <= 0.7]
-            ),
-            "low_cves": len([c for c in cve_details if c["epss_score"] and c["epss_score"] <= 0.5]),
+            "critical_cves": critical_count,
+            "high_cves": high_count,
+            "medium_cves": medium_count,
+            "low_cves": low_count,
         }
 
     return render_template(
@@ -1113,12 +1165,20 @@ def safe_upgrades():
                     "scan_status": version.scan_status,
                     "vulnerabilities": version.vulns_count,
                     "epss_score": version.epss_score,
-                    "vulnerabilitiy_severities": version.vulnerabilitiy_severities,
+                    "vulnerabilitiy_severities": version.vulnerabilitiy_severities_epss,
                     "is_latest": version.is_latest,
                     "updated_at": version.updated_at,
                 }
             )
-        package_url = available_versions[0].actionable.package_url
+        if available_versions:
+            package_url = available_versions[0].actionable.package_url
+        else:
+            actionable = session.query(Actionable).filter_by(uuid=actionable_id).first()
+            if actionable:
+                package_url = actionable.package_url
+            else:
+                return jsonify({"error": "Actionable package not found"}), 404
+
     results = sorted(results, key=lambda v: MavenVersion(v["version"]), reverse=True)
     return render_template(
         "package_scan.html",

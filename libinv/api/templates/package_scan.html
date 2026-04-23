@@ -38,10 +38,20 @@
                     <strong>Package URL:</strong><br>
                     <span class="package-name">{{ package_url }}</span>
                 </div>
+
+                {% if version_in_use != 'dummy' %}
                 <div class="col-md-6">
                     <strong>Version in Use:</strong><br>
                     <span class="version-badge">{{ version_in_use }}</span>
                 </div>
+                {% endif %}
+
+                {% if repository_id and repository_id != 'dummy' %}
+                <div class="col-md-6 mt-3">
+                    <strong>Repository:</strong><br>
+                    <span class="package-name">{{ repository_id }}</span>
+                </div>
+                {% endif %}
             </div>
         </div>
 
@@ -77,11 +87,17 @@
                                                 <td>
                             {% if scan.vulnerabilities %} 
                                 <div class="d-flex flex-wrap gap-2 align-items-center">
-                                    {% for item in scan.vulnerabilitiy_severities %}
-                                        <span class="vuln-tag {% if item.severity_level == 'critical' %}critical{% elif item.severity_level == 'high' %}high{% elif item.severity_level == 'medium' %}medium{% else %}low{% endif %}">
-                                            {{ item.severity_level }} {{ item.count }}
-                                        </span>
-                                    {% endfor %}
+                                    {% if scan.vulnerabilitiy_severities %}
+                                        {% for item in scan.vulnerabilitiy_severities %}
+                                            {% if item.count > 0 %}
+                                                <span class="vuln-tag {% if item.severity_level == 'critical' %}critical{% elif item.severity_level == 'high' %}high{% elif item.severity_level == 'medium' %}medium{% elif item.severity_level == 'low' %}low{% else %}unknown{% endif %}" title="Classification based on EPSS scores (Critical: >0.8, High: 0.7-0.8, Medium: 0.5-0.7, Low: ≤0.5) with CVSS fallback (Critical: ≥9.0, High: 7.0-8.9, Medium: 4.0-6.9, Low: >0)">
+                                                    {{ item.severity_level }} {{ item.count }}
+                                                </span>
+                                            {% endif %}
+                                        {% endfor %}
+                                    {% else %}
+                                        <span class="text-muted">No vulnerability data</span>
+                                    {% endif %}
                                 </div>
                             {% elif scan.vulnerabilities == 0 %} 
                                 <span class="badge bg-success">0</span>
@@ -117,6 +133,25 @@
     </div>
 
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <style>
+        /* Unknown severity styling */
+        .vuln-tag.unknown {
+            background-color: var(--text-muted, #6c757d);
+            color: white;
+            border: 1px solid var(--text-muted, #6c757d);
+        }
+        
+        /* EPSS indicator styling */
+        .ms-2 {
+            margin-left: 0.5rem;
+        }
+        
+        /* Tooltip improvements */
+        [title]:hover {
+            cursor: help;
+        }
+    </style>
 </body>
 
 </html>
