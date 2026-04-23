@@ -8,6 +8,7 @@ from flask import send_from_directory
 from libinv.api.actionable import actionable
 from libinv.api.compare_builds import compare_builds
 from libinv.api.graph import blastradius
+from libinv.api.onboard_package import onboard_package
 from libinv.api.wasp import wasp
 from libinv.base import conn
 from libinv.env import API_DOCS_FOLDER
@@ -18,6 +19,7 @@ app = Flask(__name__, static_folder="static", template_folder="templates")
 
 app.register_blueprint(actionable, url_prefix="/actionable")
 app.register_blueprint(blastradius, url_prefix="/blastradius")
+app.register_blueprint(onboard_package, url_prefix="/onboard")
 app.register_blueprint(wasp, url_prefix="/wasp")
 app.register_blueprint(compare_builds, url_prefix="/compare")
 
