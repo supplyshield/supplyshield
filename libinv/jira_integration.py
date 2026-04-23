@@ -84,7 +84,7 @@ class JiraProject:
 
     @property
     def issues(self):
-        jql = f'project={self.name} AND status in ("TO DO", "IN PROGRESS") order by created DESC'        
+        jql = f'project={self.name} AND status in ("TO DO", "IN PROGRESS") order by created DESC'
         return self.jira.enhanced_search_issues(
             jql_str=jql,
             maxResults=0,  # 0 means get all issues in batches
