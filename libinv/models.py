@@ -918,7 +918,8 @@ class Actionable(Base):
 
         return versions[start_index : end_index + 1]
 
-    def find_safe_version_in(self, list_of_versions):
+    def find_safe_version_in(self, list_of_versions, session=None):
+        s = session or conn
         logger.info(f"Finding closest safe version for : {self.package_url}")
 
         if len(list_of_versions) == 0:
@@ -950,7 +951,7 @@ class Actionable(Base):
             logger.warning(f"No safe version found for {self.package_url}")
             self.scan_complete = True
 
-        conn.commit()
+        s.commit()
 
     def get_latest(self, session=None):
         # Prefer eagerly-loaded relationship to avoid N+1 round trips.
@@ -1275,6 +1276,7 @@ class ActionablePackageAvailableVersion(Base):
         """ "
         The function triggers a scan for the package and updates the results.
         """
+        s = session or conn
         logger.info(f"Scanningz: {self}")
         if self.scan_status == "SUCCESS" and not is_rescan:
             logger.info(f"Scan already completed for: {self}")
@@ -1326,12 +1328,8 @@ class ActionablePackageAvailableVersion(Base):
         finally:
             if self.scan_status != "FAILED":
                 self.scan_status = "SUCCESS"
-            if not session:
-                conn.add(self)
-                conn.commit()
-            else:
-                session.add(self)
-                session.commit()
+            s.add(self)
+            s.commit()
             memory_file.close()
 
     @property

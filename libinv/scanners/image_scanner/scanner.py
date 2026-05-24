@@ -2,7 +2,7 @@ import os
 
 import boto3
 
-from libinv.base import Session
+from libinv.base import session_scope
 from libinv.helpers import get_boto3_client
 from libinv.scanners.image_scanner.base_image import detect_and_update_base_image
 from libinv.scanners.image_scanner.base_image import save_layer_information_for_image
@@ -65,7 +65,7 @@ def scan_image_index(image_index: ImageIndex, account_id: str):
             f"[#] Processing {image_tar}, Size: {image_tar.size}, Fresh: {image_tar.freshly_pulled}"
         )
         sbom_filename = generate_sbom_for_image_tar(image_tar)
-        with Session() as session:
+        with session_scope() as session:
             # Yeah, this is weird. We'll move to something better
             # Idea is to create unit files (let's say ricks/generate_sbom.py)
             # with ricks.generate_sbom as worker:
@@ -73,7 +73,7 @@ def scan_image_index(image_index: ImageIndex, account_id: str):
             #    ricks.parse_sca()
             #  ...
             image = parse_sbom_with_image_tar(
-                conn=session,
+                session=session,
                 sbom_filename=sbom_filename,
                 image_tar=image_tar,
                 account_id=account_id,
@@ -81,7 +81,7 @@ def scan_image_index(image_index: ImageIndex, account_id: str):
             save_layer_information_for_image(conn=session, image=image, image_tar=image_tar)
             detect_and_update_base_image(session=session, image=image)
             sca_filename = generate_sca_from_sbom(sbom_filename)
-            parse_sca_with_image(conn=session, sca_filename=sca_filename, image=image)
+            parse_sca_with_image(session=session, sca_filename=sca_filename, image=image)
         delete(sbom_filename)
         delete(sca_filename)
         delete(image_tar.filename)

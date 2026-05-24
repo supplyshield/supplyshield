@@ -280,6 +280,7 @@ def _compute_statistics(session):
         .filter(Repository.pod.isnot(None))
         .group_by(Repository.pod)
         .order_by(func.count(distinct(ActionablePackageAvailableVersion.uuid)).desc())
+        .limit(20)
         .all()
     )
 

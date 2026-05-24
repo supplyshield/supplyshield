@@ -3,11 +3,11 @@ import json
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import Session as OrmSession
 from sqlalchemy.orm import selectinload
 from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
-from libinv.base import Session
 from libinv.env import GRYPE_BIN
 from libinv.helpers import retry_on_exception
 from libinv.helpers import subprocess_run
@@ -33,7 +33,7 @@ def generate_sca_from_sbom(sbom_filename: str):
 @retry_on_exception(SCADependencyException)
 @retry_on_exception(IntegrityError)
 @retry_on_exception(OperationalError, count=6)
-def parse_sca_with_image(conn: Session, sca_filename: str, image: Image):
+def parse_sca_with_image(session: OrmSession, sca_filename: str, image: Image):
     with open(sca_filename, "r", encoding="UTF-8") as sca_file:
         sca_json = json.load(sca_file)
     matches = sca_json["matches"]
@@ -46,7 +46,7 @@ def parse_sca_with_image(conn: Session, sca_filename: str, image: Image):
         "platform": image.platform,
     }
     image = (
-        conn.query(Image)
+        session.query(Image)
         .options(
             selectinload(Image.packages)
             .selectinload(ImagePackageAssociation.package)
@@ -61,7 +61,9 @@ def parse_sca_with_image(conn: Session, sca_filename: str, image: Image):
 
     for match in tqdm(matches):
         try:
-            vuln, db_updated = process_sca_match_for_image(conn=conn, image=image, match=match)
+            vuln, db_updated = process_sca_match_for_image(
+                session=session, image=image, match=match
+            )
         except SCADependencyException:
             # TODO: Handle this properly. This might happen when another instance of libinv
             # altered this particular package so that it no longer exists in db but is present
@@ -69,11 +71,11 @@ def parse_sca_with_image(conn: Session, sca_filename: str, image: Image):
             raise
         except IntegrityError:
             # This happens when two libinv instances picked the same image
-            conn.rollback()
+            session.rollback()
             raise
         except OperationalError:
             # This happens when there's a deadlock
-            conn.rollback()
+            session.rollback()
             raise
 
         with logging_redirect_tqdm():
@@ -84,21 +86,21 @@ def parse_sca_with_image(conn: Session, sca_filename: str, image: Image):
 
     try:
         logger.debug("Committing")
-        conn.commit()
+        session.commit()
         ts1 = datetime.datetime.now()
         logger.debug(f"in db {ts1 - ts0}")
         print("[+] SCA: pushing to DB done")
     except OperationalError:
         # This happens when there's a deadlock
-        conn.rollback()
+        session.rollback()
         raise
     except IntegrityError:
         # This happens when two libinv instances picked the same image
-        conn.rollback()
+        session.rollback()
         raise
 
 
-def process_sca_match_for_image(conn, image, match):
+def process_sca_match_for_image(session: OrmSession, image, match):
     artifact = match["artifact"]
     if artifact["purl"]:
         package_filter = {"purl": artifact["purl"]}
@@ -113,7 +115,7 @@ def process_sca_match_for_image(conn, image, match):
     # Which would be faster as we've already selectload while fetching image
     # package = filter_model_collection(image.packages, package_filter)[0]
     # This is not working currently
-    package = conn.query(Package).filter_by(**package_filter).one_or_none()
+    package = session.query(Package).filter_by(**package_filter).one_or_none()
     if not package:
         raise SCADependencyException(f"Package not found in image: {package_filter}")
 
@@ -126,10 +128,10 @@ def process_sca_match_for_image(conn, image, match):
         cvss = None
 
     # This is efficient because .get uses identity map by default
-    vulnerability = conn.get(Vulnerability, vuln["id"])
+    vulnerability = session.get(Vulnerability, vuln["id"])
     if not vulnerability:
         vulnerability = Vulnerability(id=vuln["id"])
-        conn.add(vulnerability)
+        session.add(vulnerability)
 
     vulnerability.set_desciption(vuln.get("description"))
     vulnerability.severity = vuln.get("severity")
@@ -139,7 +141,7 @@ def process_sca_match_for_image(conn, image, match):
         vulnerability.nvd_cvss_exploitability_score = cvss["metrics"]["exploitabilityScore"]
         vulnerability.nvd_cvss_impact_score = cvss["metrics"]["impactScore"]
 
-    association = conn.get(
+    association = session.get(
         VulnerabilityPackageAssociation,
         {
             "package_id": package.id,
@@ -150,10 +152,10 @@ def process_sca_match_for_image(conn, image, match):
         association = VulnerabilityPackageAssociation(
             package_id=package.id, vulnerability_id=vulnerability.id
         )
-        conn.add(association)
+        session.add(association)
     association.fix = fix
 
-    if conn.is_modified(association) or conn.is_modified(vulnerability) or conn.new:
+    if session.is_modified(association) or session.is_modified(vulnerability) or session.new:
         return vulnerability, True
 
     return vulnerability, False

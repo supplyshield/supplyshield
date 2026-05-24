@@ -3,11 +3,11 @@ import json
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.exc import OperationalError
+from sqlalchemy.orm import Session as OrmSession
 from sqlalchemy.orm import selectinload
 from tqdm import tqdm
 from tqdm.contrib.logging import logging_redirect_tqdm
 
-from libinv.base import Session
 from libinv.env import SYFT_BIN
 from libinv.helpers import retry_on_exception
 from libinv.helpers import subprocess_run
@@ -41,7 +41,7 @@ def generate_sbom_for_image_tar(image_tar: ImageTarBall):
 @retry_on_exception(IntegrityError)
 @retry_on_exception(OperationalError, count=6)
 def parse_sbom_with_image_tar(
-    conn: Session, sbom_filename: str, image_tar: ImageTarBall, account_id: str
+    session: OrmSession, sbom_filename: str, image_tar: ImageTarBall, account_id: str
 ) -> Image:
     with open(sbom_filename, "r", encoding="UTF-8") as sbom_file:
         sbom_json = json.load(sbom_file)
@@ -51,7 +51,7 @@ def parse_sbom_with_image_tar(
     try:
         ts0 = datetime.datetime.now()
         image, _ = get_or_create(
-            conn,
+            session,
             Image,
             name=image_tar.name,
             backend_tech=backend_tech,
@@ -60,9 +60,9 @@ def parse_sbom_with_image_tar(
             digest=image_tar.digest,
             tag=image_tar.tag,
         )
-        conn.commit()
+        session.commit()
         image = (
-            conn.query(Image)
+            session.query(Image)
             .options(
                 selectinload(Image.packages, ImagePackageAssociation.package, Package.licenses)
             )
@@ -72,7 +72,7 @@ def parse_sbom_with_image_tar(
 
         for artifact in tqdm(artifacts):
             package, db_updated = process_sbom_artifact_for_image(
-                conn=conn, image=image, artifact=artifact
+                session=session, image=image, artifact=artifact
             )
 
             with logging_redirect_tqdm():
@@ -82,23 +82,23 @@ def parse_sbom_with_image_tar(
                     logger.debug(f"Existing: {image} already has {package}")
 
         logger.debug("Committing")
-        conn.commit()
+        session.commit()
         ts1 = datetime.datetime.now()
         logger.debug(f"in db {ts1 - ts0}")
         print("[+] SBOM: pushing to DB done")
 
     except OperationalError:
         # This happens when there's a deadlock
-        conn.rollback()
+        session.rollback()
         raise
     except IntegrityError:
         # This happens when two libinv instances picked the same image
-        conn.rollback()
+        session.rollback()
         raise
     return image
 
 
-def process_sbom_artifact_for_image(conn: Session, image, artifact):
+def process_sbom_artifact_for_image(session: OrmSession, image, artifact):
     modified = False
 
     package_filter = {
@@ -108,8 +108,8 @@ def process_sbom_artifact_for_image(conn: Session, image, artifact):
         "purl": artifact["purl"],
     }
 
-    package, _ = get_or_create(conn, Package, **package_filter)
-    association = conn.get(
+    package, _ = get_or_create(session, Package, **package_filter)
+    association = session.get(
         ImagePackageAssociation, {"image_id": image.id, "package_id": package.id}
     )
     if not association:
@@ -128,8 +128,8 @@ def process_sbom_artifact_for_image(conn: Session, image, artifact):
         # Syft gives out long license names often, db needs to cope up with that
         license_name = license_name[:MAX_LENGTH_LICENSE]
         license_filter = {"name": license_name}
-        license, _ = get_or_create(conn, License, **license_filter)
-        association = conn.get(
+        license, _ = get_or_create(session, License, **license_filter)
+        association = session.get(
             PackageLicenseAssociation, {"license_id": license.id, "package_id": package.id}
         )
         if not association:
@@ -142,7 +142,7 @@ def process_sbom_artifact_for_image(conn: Session, image, artifact):
         #     license = License(**license_filter)
         # package.licenses.append(license)
 
-    if conn.is_modified(package) or conn.is_modified(image) or conn.new or modified:
+    if session.is_modified(package) or session.is_modified(image) or session.new or modified:
         return package, True
 
     return package, False
