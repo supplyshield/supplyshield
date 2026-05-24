@@ -107,8 +107,17 @@ class PackageLicenseAssociation(Base):
 
 @declarative_mixin
 class TimestampMixin:
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    # Sprint 34.1: server_default=func.now() means Postgres always populates
+    # these on INSERT, so they are NOT NULL by construction. Marking explicit.
+    created_at = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
 
 
 class Image(Base, TimestampMixin):
@@ -116,22 +125,33 @@ class Image(Base, TimestampMixin):
 
     id = Column(Integer, primary_key=True)
     name = Column(String(100), nullable=False)
-    backend_tech = Column(String(24))
+    # Sprint 34.1: explicit nullable=True for optional build/CI metadata.
+    backend_tech = Column(String(24), nullable=True)
     account_id = Column(
         ForeignKey("libinv.accounts.id", onupdate="CASCADE", ondelete="CASCADE"), nullable=False
     )
     digest = Column(String(72), nullable=False)
-    tag = Column(String(128))
+    tag = Column(String(128), nullable=True)
     # Sprint 34.3: git SHA-1 is 40 hex chars (SHA-256 is 64). String(128) was
     # ~3x oversized; tightened to 40 to match git's canonical commit-hash length.
-    commit = Column(String(40))
+    # Sprint 34.1: nullable=True — legacy images may predate commit linkage.
+    commit = Column(String(40), nullable=True)
     platform = Column(String(24), nullable=False)
-    parent_image_id = Column(ForeignKey("libinv.images.id", onupdate="CASCADE", ondelete="CASCADE"))
-    base_image_id = Column(ForeignKey("libinv.images.id", onupdate="CASCADE", ondelete="CASCADE"))
-    repository_id = Column(
-        ForeignKey("libinv.repositories.id", onupdate="CASCADE", ondelete="CASCADE")
+    # Sprint 34.1: parent/base/repo/wasp FKs are nullable=True — root images
+    # have no parent, and images may exist before being bridged to a repo/wasp.
+    parent_image_id = Column(
+        ForeignKey("libinv.images.id", onupdate="CASCADE", ondelete="CASCADE"), nullable=True
     )
-    wasp_id = Column(ForeignKey("libinv.wasps.id", onupdate="CASCADE", ondelete="CASCADE"))
+    base_image_id = Column(
+        ForeignKey("libinv.images.id", onupdate="CASCADE", ondelete="CASCADE"), nullable=True
+    )
+    repository_id = Column(
+        ForeignKey("libinv.repositories.id", onupdate="CASCADE", ondelete="CASCADE"),
+        nullable=True,
+    )
+    wasp_id = Column(
+        ForeignKey("libinv.wasps.id", onupdate="CASCADE", ondelete="CASCADE"), nullable=True
+    )
 
     parent_image = relationship("Image", remote_side=[id], foreign_keys=[parent_image_id])
     base_image = relationship("Image", remote_side=[id], foreign_keys=[base_image_id])
@@ -188,11 +208,19 @@ class Package(Base):
 
     id = Column(Integer, primary_key=True)
     name = Column(String(100), nullable=False)
-    version = Column(String(150))
-    language = Column(String(20))
-    purl = Column(String(300), unique=True)
-    created_at = Column(DateTime, server_default=func.now())
-    updated_at = Column(DateTime, server_default=func.now(), onupdate=func.current_timestamp())
+    # Sprint 34.1: version/language are nullable=True (legacy packages
+    # may lack metadata); purl is the semantic identifier — required.
+    version = Column(String(150), nullable=True)
+    language = Column(String(20), nullable=True)
+    purl = Column(String(300), unique=True, nullable=False)
+    # Sprint 34.1: server_default guarantees population; mark NOT NULL.
+    created_at = Column(DateTime, server_default=func.now(), nullable=False)
+    updated_at = Column(
+        DateTime,
+        server_default=func.now(),
+        onupdate=func.current_timestamp(),
+        nullable=False,
+    )
     images = relationship("ImagePackageAssociation", back_populates="package")
     licenses = relationship("PackageLicenseAssociation", back_populates="package")
     vulnerabilities = relationship("VulnerabilityPackageAssociation", back_populates="package")
@@ -210,7 +238,8 @@ class ImagePackageAssociation(Base):
     package_id = Column(
         ForeignKey("libinv.packages.id", onupdate="CASCADE", ondelete="CASCADE"), primary_key=True
     )
-    pkg_metadata = Column("metadata", Text)
+    # Sprint 34.1: optional free-form metadata blob.
+    pkg_metadata = Column("metadata", Text, nullable=True)
 
     image = relationship("Image", back_populates="packages")
     package = relationship("Package", back_populates="images")
@@ -252,12 +281,21 @@ class Vulnerability(Base):
     __tablename__ = "vulnerabilities"
 
     id = Column(String(50), primary_key=True)
-    description = Column(String(MAX_LENGTH_VULNERABILITY_DESCRIPTION))
-    severity = Column(String(10))
-    related = Column(String(200), doc="comma seperated list of related cve ids")
-    nvd_cvss_base_score = Column("nvd-cvss.base_score", Float(precision=3))
-    nvd_cvss_exploitability_score = Column("nvd-cvss.exploitability_score", Float(precision=3))
-    nvd_cvss_impact_score = Column("nvd-cvss.impact_score", Float(precision=3))
+    # Sprint 34.1: upstream-feed-derived fields — feeds may omit any of them.
+    description = Column(String(MAX_LENGTH_VULNERABILITY_DESCRIPTION), nullable=True)
+    severity = Column(String(10), nullable=True)
+    related = Column(
+        String(200), doc="comma seperated list of related cve ids", nullable=True
+    )
+    nvd_cvss_base_score = Column(
+        "nvd-cvss.base_score", Float(precision=3), nullable=True
+    )
+    nvd_cvss_exploitability_score = Column(
+        "nvd-cvss.exploitability_score", Float(precision=3), nullable=True
+    )
+    nvd_cvss_impact_score = Column(
+        "nvd-cvss.impact_score", Float(precision=3), nullable=True
+    )
     packages = relationship("VulnerabilityPackageAssociation", back_populates="vulnerability")
 
     def set_description(self, desc: str):
@@ -272,7 +310,8 @@ class License(Base):
     __tablename__ = "license_family"
 
     id = Column(Integer, primary_key=True)
-    name = Column(String(MAX_LENGTH_LICENSE), unique=True)
+    # Sprint 34.1: license name is the semantic key (unique) — required.
+    name = Column(String(MAX_LENGTH_LICENSE), unique=True, nullable=False)
     packages = relationship("PackageLicenseAssociation", back_populates="license")
 
     def set_license_name(self, name):
@@ -305,14 +344,18 @@ class Repository(Base):
     is_public = Column(Boolean, default=False, nullable=False)
     images = relationship("Image", back_populates="repository")
     secbugs = relationship("Secbug", back_populates="repository")
-    pod = Column(String(200))
-    subpod = Column(String(200))
+    # Sprint 34.1: optional org metadata.
+    pod = Column(String(200), nullable=True)
+    subpod = Column(String(200), nullable=True)
 
     actionable_versions = relationship(
         "Repository_ActionablePackageAvailableVersion", back_populates="repository"
     )
 
     UniqueConstraint("org", "name", name="org_repo")
+
+    # Note: pod/subpod left nullable=True (declared above) — these are optional
+    # organizational metadata that may not be set for every repository.
 
     def __str__(self):
         return self.url
@@ -376,7 +419,9 @@ class Repository(Base):
 class Account(Base):
     __tablename__ = "accounts"
     id = Column(String(12), primary_key=True)
-    name = Column(String(50))
+    # Sprint 34.1: account name is the human-readable identifier — required
+    # (Account.ensure_exists() raises ValueError if a creating call omits it).
+    name = Column(String(50), nullable=False)
     type = Column(String(10), server_default="stage", nullable=False)
 
     def is_prod(self):
@@ -499,18 +544,23 @@ class Secbug(Base, TimestampMixin):
     __tablename__ = "secbugs"
 
     id = Column(String(50), primary_key=True)
-    environment = Column(String(20))
-    severity = Column(String(10))
-    summary = Column(String(200))
-    description = Column(String(MAX_LENGTH_VULNERABILITY_DESCRIPTION))
-    vulnerability_category = Column(String(120))
-    identified_by = Column(String(40))
-    company = Column(String(20))
-    is_risk = Column(Boolean())
+    # Sprint 34.1: secbug fields are pulled from an external system that may
+    # omit any of them — explicit nullable=True marks intent.
+    environment = Column(String(20), nullable=True)
+    severity = Column(String(10), nullable=True)
+    summary = Column(String(200), nullable=True)
+    description = Column(String(MAX_LENGTH_VULNERABILITY_DESCRIPTION), nullable=True)
+    vulnerability_category = Column(String(120), nullable=True)
+    identified_by = Column(String(40), nullable=True)
+    company = Column(String(20), nullable=True)
+    is_risk = Column(Boolean(), nullable=True)
     pulled_at = Column(DateTime(timezone=True), nullable=False)
     deleted_at = Column(DateTime(timezone=True), nullable=True)
+    # Sprint 34.1: repository_id nullable=True — secbugs may exist before
+    # a repository is associated (e.g. cross-cutting org-level bugs).
     repository_id = Column(
-        ForeignKey("libinv.repositories.id", onupdate="CASCADE", ondelete="CASCADE")
+        ForeignKey("libinv.repositories.id", onupdate="CASCADE", ondelete="CASCADE"),
+        nullable=True,
     )
 
     repository = relationship("Repository", back_populates="secbugs")
@@ -560,15 +610,25 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
 
     id = Column(Integer, primary_key=True, autoincrement=True)
     uuid = Column(String(36), nullable=False, unique=True, default=uuid4)
-    repository_id = Column(ForeignKey("libinv.repositories.id", onupdate="CASCADE"))
-    tag = Column(String(128))
+    # Sprint 34.1: repository_id nullable=True for the (rare) excluded-repo
+    # path that returns before linking; Wasp's domain invariants come from
+    # is_valid_raw_message at the caterpillar-message layer.
+    repository_id = Column(
+        ForeignKey("libinv.repositories.id", onupdate="CASCADE"), nullable=True
+    )
+    # Sprint 34.1: tag is not in the message schema's required[] — keep optional.
+    tag = Column(String(128), nullable=True)
     # Sprint 34.3: git SHA-1 is 40 hex chars; tightened from String(128).
-    commit = Column(String(40))
-    environment = Column(String(128))
-    jenkins_url = Column(String(256))
+    # Sprint 34.1: commit/environment/jenkins_url are required by the
+    # caterpillar message schema (commit + aws_environment + job_url) and
+    # eat_caterpillar_message always populates them — mark NOT NULL.
+    commit = Column(String(40), nullable=False)
+    environment = Column(String(128), nullable=False)
+    jenkins_url = Column(String(256), nullable=False)
     raw_message = Column(String(2048), nullable=False)
     ate_successfully = Column(Boolean(), nullable=False, default=True, server_default="1")
-    complaints = Column(Text, default="")
+    # Sprint 34.1: server-default + Python-default of "" — never NULL.
+    complaints = Column(Text, default="", server_default="", nullable=False)
 
     images = relationship("Image", back_populates="wasp")
     repository = relationship("Repository")
@@ -771,9 +831,15 @@ class SastLobMetaData(Base, TimestampMixin):
     repository = relationship("Repository")
     module = Column(String(1024), nullable=False)
     sub_module = Column(String(1024), nullable=False)
-    repository_id = Column(ForeignKey("libinv.repositories.id", onupdate="CASCADE"))
+    # Sprint 34.1: repository_id nullable=True — LOB metadata may be created
+    # before the repo row is bridged.
+    repository_id = Column(
+        ForeignKey("libinv.repositories.id", onupdate="CASCADE"), nullable=True
+    )
 
-    bugcounts = Column(Integer, default=0)
+    # Sprint 34.1: bugcounts has Python default=0; pair with server_default
+    # so DB-level INSERTs without the column also get 0, and mark NOT NULL.
+    bugcounts = Column(Integer, default=0, server_default="0", nullable=False)
 
     Index("idx_repository", repository_id)
 
@@ -786,25 +852,35 @@ class SastResult(Base, TimestampMixin):
     __tablename__ = "sast_result"
 
     id = Column(String(150), primary_key=True)
-    lob_id = Column(ForeignKey("libinv.sast_lob_metadata.id", onupdate="CASCADE"))
+    # Sprint 34.1: all FK + free-form text fields below are nullable=True
+    # (sast result rows can be partial — many fields populated only after
+    # validation / triage).
+    lob_id = Column(
+        ForeignKey("libinv.sast_lob_metadata.id", onupdate="CASCADE"), nullable=True
+    )
     lob_metadata = relationship("SastLobMetaData")
-    extras = Column(MutableDict.as_mutable(JSON))
-    vulnsnippet = Column(Text)
-    githubpath = Column(String(1024))
-    secbugurl = Column(String(1024))
-    file_path = Column(String(1024))
-    priority = Column(String(20))
-    confidence = Column(String(20))
-    description = Column(Text)
-    public_initial_point = Column(Text)
-    source = Column(String(200))
-    isactive = Column(Boolean)
-    wasp_id = Column(ForeignKey("libinv.wasps.id", onupdate="CASCADE", ondelete="CASCADE"))
-    fixed_date = Column(DateTime)
-    validated = Column(Integer)  # 0=not validted yet, 1=valid bug, 2=false positive/intended
-    validate_date = Column(DateTime)
-    secbug_created_date = Column(DateTime)
-    mean_solve_time = Column(Integer)
+    extras = Column(MutableDict.as_mutable(JSON), nullable=True)
+    vulnsnippet = Column(Text, nullable=True)
+    githubpath = Column(String(1024), nullable=True)
+    secbugurl = Column(String(1024), nullable=True)
+    file_path = Column(String(1024), nullable=True)
+    priority = Column(String(20), nullable=True)
+    confidence = Column(String(20), nullable=True)
+    description = Column(Text, nullable=True)
+    public_initial_point = Column(Text, nullable=True)
+    source = Column(String(200), nullable=True)
+    isactive = Column(Boolean, nullable=True)
+    wasp_id = Column(
+        ForeignKey("libinv.wasps.id", onupdate="CASCADE", ondelete="CASCADE"),
+        nullable=True,
+    )
+    fixed_date = Column(DateTime, nullable=True)
+    validated = Column(
+        Integer, nullable=True
+    )  # 0=not validted yet, 1=valid bug, 2=false positive/intended
+    validate_date = Column(DateTime, nullable=True)
+    secbug_created_date = Column(DateTime, nullable=True)
+    mean_solve_time = Column(Integer, nullable=True)
 
     # Sprint 33.1/33.2: declare indexes already created by alembic 0002_fk_indexes
     __table_args__ = (
@@ -837,7 +913,13 @@ class Actionable(Base):
 
     uuid = Column(String(36), nullable=False, unique=True, default=uuid4, primary_key=True)
     package_url = Column(String(300), nullable=False, unique=True)
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    # Sprint 34.1: server_default guarantees population — NOT NULL.
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
 
     available_versions = relationship(
         "ActionablePackageAvailableVersion",
@@ -1221,10 +1303,22 @@ class ActionablePackageAvailableVersion(Base):
     vulns_count = Column(Integer, nullable=True)
     epss_score = Column(Float(precision=6), nullable=True)
     scan_output = Column(Text, nullable=True)
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
-    is_version_in_use = Column(Boolean, default=False)
+    # Sprint 34.1: server_default guarantees population — NOT NULL.
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
+    # Sprint 34.1: Python default=False; pair with server_default + NOT NULL.
+    is_version_in_use = Column(
+        Boolean, default=False, server_default="false", nullable=False
+    )
+    # Sprint 34.1: actionable_id FK left nullable=True — an APAV row may
+    # transiently exist without an Actionable parent during ingestion.
     actionable_id = Column(
-        ForeignKey("libinv.safe_actionable.uuid", onupdate="CASCADE", ondelete="CASCADE")
+        ForeignKey("libinv.safe_actionable.uuid", onupdate="CASCADE", ondelete="CASCADE"),
+        nullable=True,
     )
     scancode_project_uuid = Column(String(36), nullable=True)
     actionable = relationship("Actionable", back_populates="available_versions")
@@ -1522,20 +1616,35 @@ class Repository_ActionablePackageAvailableVersion(Base):
     __tablename__ = "repository_actionable_package_versions_association"
 
     uuid = Column(String(36), nullable=False, unique=True, default=uuid4, primary_key=True)
-    wasp_uuid = Column(ForeignKey("libinv.wasps.uuid", onupdate="CASCADE", ondelete="CASCADE"))
+    # Sprint 34.1: FKs left nullable=True — association rows may be created
+    # by partial ingestion paths that fill in linkage incrementally.
+    wasp_uuid = Column(
+        ForeignKey("libinv.wasps.uuid", onupdate="CASCADE", ondelete="CASCADE"),
+        nullable=True,
+    )
     actionable_package_version_id = Column(
         ForeignKey(
             "libinv.actionable_package_available_versions.uuid",
             onupdate="CASCADE",
             ondelete="CASCADE",
-        )
+        ),
+        nullable=True,
     )
     repository_id = Column(
-        ForeignKey("libinv.repositories.id", onupdate="CASCADE", ondelete="CASCADE")
+        ForeignKey("libinv.repositories.id", onupdate="CASCADE", ondelete="CASCADE"),
+        nullable=True,
     )
     environment = Column(String(20), nullable=False)
-    created_at = Column(DateTime(timezone=True), server_default=func.now())
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    # Sprint 34.1: server_default guarantees population — NOT NULL.
+    created_at = Column(
+        DateTime(timezone=True), server_default=func.now(), nullable=False
+    )
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
 
     wasp = relationship("Wasp", back_populates="actionable_versions")
     available_version = relationship(
@@ -1716,7 +1825,13 @@ class EPSS(Base):
     # losslessly. Callers should pass either a ``datetime.date`` or an
     # ISO-8601 'YYYY-MM-DD' string — psycopg2 parses both.
     epss_date = Column(Date, nullable=True)
-    updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+    # Sprint 34.1: server_default guarantees population — NOT NULL.
+    updated_at = Column(
+        DateTime(timezone=True),
+        server_default=func.now(),
+        onupdate=func.now(),
+        nullable=False,
+    )
 
     # Sprint 33.1/33.2: declare composite index already created by alembic 0002_fk_indexes
     __table_args__ = (
