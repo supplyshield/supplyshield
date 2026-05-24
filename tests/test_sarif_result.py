@@ -251,3 +251,142 @@ def test_make_memo_key_format(empty_sarif_file):
         _fake_config(), str(empty_sarif_file), MagicMock(), session=MagicMock()
     )
     assert sr.make_memo_key("pod", "subpod", "mod") == "pod::subpod::mod"
+
+
+# ---------------------------------------------------------------------------
+# 8. Sprint 28 - __init__ uses `with open(...)` (no fd leak).
+# ---------------------------------------------------------------------------
+def test_sarif_result_closes_file_handle(empty_sarif_file):
+    """The SARIF file handle must be closed after __init__.
+
+    Verifies the ``with open(...)`` context-manager protocol is used so a
+    long-running scanner cannot exhaust file descriptors. Uses a patched
+    ``builtins.open`` to inspect the file object's ``__exit__`` is invoked,
+    and follows up with a smoke test that 100 instantiations do not raise.
+    """
+    from libinv.scanners.repository_scanner.sast.SarifResult import SarifResult
+
+    real_open = open
+    opened_files = []
+
+    def tracking_open(*args, **kwargs):
+        fh = real_open(*args, **kwargs)
+        opened_files.append(fh)
+        return fh
+
+    source = MagicMock()
+    with patch("builtins.open", side_effect=tracking_open):
+        SarifResult(
+            _fake_config(), str(empty_sarif_file), source, session=MagicMock()
+        )
+
+    # The handle opened inside __init__ must be closed after the ``with``.
+    assert opened_files, "expected SarifResult.__init__ to open the sarif file"
+    assert all(
+        fh.closed for fh in opened_files
+    ), "SarifResult.__init__ leaked a file descriptor"
+
+    # Smoke test: 100 sequential instantiations must not exhaust fds.
+    instances = []
+    try:
+        for _ in range(100):
+            instances.append(
+                SarifResult(
+                    _fake_config(),
+                    str(empty_sarif_file),
+                    source,
+                    session=MagicMock(),
+                )
+            )
+    except OSError:
+        pytest.fail("file-descriptor leak in SarifResult.__init__")
+
+
+# ---------------------------------------------------------------------------
+# 9. Sprint 28 - record.extras as a JSON string is parsed correctly.
+# ---------------------------------------------------------------------------
+def test_add_sarif_result_handles_string_extras(one_rule_one_result_sarif):
+    """``add_sarif_result_to_db`` must use ``json.loads`` on stringified extras.
+
+    The DB stores ``SastResult.extras`` as a Text column, so the row comes
+    back as a JSON string. ``json.load`` (file-like) raises AttributeError
+    on strings; ``json.loads`` is correct. The fix wraps the call in an
+    ``isinstance(record.extras, str)`` guard so already-parsed dicts pass
+    through untouched.
+    """
+    from libinv.scanners.repository_scanner.sast.SarifResult import SarifResult
+
+    fake_session = MagicMock(name="injected_session")
+
+    # Existing record whose extras came back from the DB as a JSON string,
+    # AND whose public_endpoints matches the new extras so the comparison
+    # short-circuits (we only want to exercise the json.loads path).
+    record_mock = MagicMock()
+    record_mock.validated = "NOTVALIDATED-other"  # not the "validated" sentinel
+    record_mock.extras = '{"public_endpoints": {}}'
+    fake_session.query.return_value.filter_by.return_value.first.return_value = (
+        record_mock
+    )
+
+    source = MagicMock()
+    source.value = "semgrep"
+
+    sr = SarifResult(
+        _fake_config(),
+        str(one_rule_one_result_sarif),
+        source,
+        session=fake_session,
+    )
+
+    # Force the validation check to enter the "not yet validated" branch and
+    # also force module.get_publicpaths_priority to return empty public_paths
+    # so the comparison hits the equal-endpoints short-circuit.
+    from libinv.scanners.repository_scanner.sast.enums.ValidEnum import ValidEnum
+
+    record_mock.validated = ValidEnum.NOTVALIDATED.value
+
+    fake_module = MagicMock()
+    fake_module.get_vuln_paths.return_value = []
+    fake_module.get_publicpaths_priority.return_value = (MagicMock(value="MEDIUM"), {})
+    sr.rulesId_ModeParser["default"] = fake_module
+    sr.memo_lob_id["pod-a::sub-a::libinv.idor.rule-1"] = 1
+
+    sr.add_sarif_result_to_db()
+
+    # The string was parsed into a dict by json.loads (NOT json.load, which
+    # would have raised AttributeError on the string).
+    assert isinstance(record_mock.extras, dict)
+    assert record_mock.extras == {"public_endpoints": {}}
+
+
+# ---------------------------------------------------------------------------
+# 10. Sprint 28 - SARIF without `rules` array doesn't crash.
+# ---------------------------------------------------------------------------
+def test_parsesarifmetadata_handles_missing_rules(tmp_path):
+    """parsesarifmetadata must tolerate a tool/driver with no `rules` key.
+
+    Semgrep with ``--severity`` filters can emit SARIF where the driver
+    section omits ``rules`` entirely. The previous KeyError would crash
+    every scan on such tools.
+    """
+    from libinv.scanners.repository_scanner.sast.SarifResult import SarifResult
+
+    sarif = {
+        "version": "2.1.0",
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "runs": [
+            {
+                "tool": {"driver": {"name": "semgrep"}},  # no `rules` key
+                "results": [],
+            }
+        ],
+    }
+    sarif_path = tmp_path / "no_rules.sarif"
+    sarif_path.write_text(json.dumps(sarif))
+
+    source = MagicMock()
+    # Must not crash with KeyError.
+    sr = SarifResult(_fake_config(), str(sarif_path), source, session=MagicMock())
+
+    # parsesarifmetadata returned an empty index instead of raising.
+    assert sr.rulemetadata == {}

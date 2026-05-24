@@ -3,6 +3,7 @@ import logging
 
 from sqlalchemy.orm import Session as OrmSession
 
+from libinv.api.metrics import sast_findings_total
 from libinv.base import conn
 from libinv.models import SastLobMetaData
 from libinv.models import SastResult
@@ -14,6 +15,25 @@ from libinv.scanners.repository_scanner.sast.semgrep.modes.DefaultMode import De
 
 logger = logging.getLogger("libinv.SarifResult")
 
+# Sprint 28: severity normalization. SARIF 2.1.0 defines ``level`` as one
+# of {error, warning, note, none}; many real tools also emit
+# {low, medium, high, critical} or freeform strings. We keep the standard
+# four passthrough, allow the common four-tier set, and bucket everything
+# else into ``unknown`` so the prometheus label cardinality stays bounded.
+_SARIF_SEVERITY_ALLOWED = frozenset(
+    {"error", "warning", "note", "none", "low", "medium", "high", "critical"}
+)
+
+
+def _normalize_sarif_severity(level) -> str:
+    """Return a bounded severity label for ``sast_findings_total``."""
+    if not isinstance(level, str):
+        return "unknown"
+    lvl = level.strip().lower()
+    if lvl in _SARIF_SEVERITY_ALLOWED:
+        return lvl
+    return "unknown"
+
 
 class SarifResult:
     """
@@ -21,7 +41,8 @@ class SarifResult:
     """
 
     def __init__(self, config, sariffile, source, session: OrmSession | None = None) -> None:
-        self.sarifjson = json.load(open(sariffile, "r"))
+        with open(sariffile, "r", encoding="utf-8") as f:
+            self.sarifjson = json.load(f)
         self.config = config
         self.source = source
         self._session = session
@@ -80,6 +101,15 @@ class SarifResult:
                 self.memo_lob_id[key] = metadata.id
 
     def add_sarif_result_to_db(self):
+        # Sprint 28: tool name is constant across all results in a run, so
+        # read it once outside the loop. Fall back to ``"unknown"`` if the
+        # SARIF is missing the (mandatory-per-spec) driver.name field, to
+        # keep the counter labelset bounded.
+        try:
+            tool_name = self.sarifjson["runs"][0]["tool"]["driver"]["name"]
+        except (KeyError, IndexError, TypeError):
+            tool_name = "unknown"
+
         for i, sarif_row in enumerate(self.sarifjson["runs"][0]["results"]):
             full_path = sarif_row["locations"][0]["physicalLocation"]["artifactLocation"]["uri"]
             subpath_without_base = full_path[len(str(self.config.base_code_directory)) :]
@@ -133,7 +163,7 @@ class SarifResult:
 
             if record:
                 if isinstance(record.extras, str):
-                    record.extras = json.load(record.extras)
+                    record.extras = json.loads(record.extras)
 
                 if extras["public_endpoints"] == record.extras["public_endpoints"]:
                     continue
@@ -143,6 +173,11 @@ class SarifResult:
                     record.public_initial_point = public_initial_point
                     record.priority = prioriy.value
                     self._s.commit()
+                    # Sprint 28: counter increments only on successful
+                    # persistence (after commit), so a DB error above
+                    # raises and we never over-count.
+                    severity = _normalize_sarif_severity(sarif_row.get("level", "none"))
+                    sast_findings_total.labels(severity=severity, tool=tool_name).inc()
                     continue
 
             record = SastResult(
@@ -169,6 +204,11 @@ class SarifResult:
             )
             self._s.add(record)
             self._s.commit()
+            # Sprint 28: counter increments only on successful persistence
+            # (after commit). A DB error above raises and we never
+            # over-count.
+            severity = _normalize_sarif_severity(sarif_row.get("level", "none"))
+            sast_findings_total.labels(severity=severity, tool=tool_name).inc()
 
         return
 
@@ -187,7 +227,14 @@ class SarifResult:
     def parsesarifmetadata(self):
         metadata = {}
 
-        for i, semgrep in enumerate(self.sarifjson["runs"][0]["tool"]["driver"]["rules"]):
+        driver = self.sarifjson["runs"][0]["tool"]["driver"]
+        rules = driver.get("rules", [])
+        if not rules:
+            logger.warning(
+                "SARIF tool %s emitted no rules array", driver.get("name", "<unknown>")
+            )
+
+        for i, semgrep in enumerate(rules):
             metadata[semgrep["id"]] = {
                 "description": semgrep["fullDescription"]["text"],
                 "properties": semgrep["properties"],

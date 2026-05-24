@@ -69,6 +69,17 @@ scan_duration_seconds = Histogram(
     buckets=SCAN_DURATION_BUCKETS,
     registry=_registry,
 )
+# Sprint 28: per-finding SAST counter. Incremented once per SARIF result
+# AFTER it is persisted by ``SarifResult.add_sarif_result_to_db`` (whether
+# the persistence path was insert OR update). Severity is normalized to a
+# bounded set so prometheus cardinality stays predictable even when an
+# upstream tool emits non-standard ``level`` strings.
+sast_findings_total = Counter(
+    "libinv_sast_findings_total",
+    "Total SAST findings persisted by SarifResult.",
+    labelnames=("severity", "tool"),
+    registry=_registry,
+)
 up = Gauge(
     "libinv_up",
     "1 if libinv's Flask app is reachable.",
