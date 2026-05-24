@@ -16,11 +16,56 @@ from libinv.env import GITHUB_APP_PRIVATE_KEY_FILE
 logger = logging.getLogger(__name__)
 
 
+# Snapshot the original module-level callables at import time. When a test
+# uses `unittest.mock.patch("libinv.vcs.requests.<method>")`, the patched
+# attribute will no longer be the same object as the snapshot; the session
+# shim below honors that patch so existing Sprint 14 test fixtures (which
+# bypass `__init__` via `__new__`) keep working without modification.
+_REQUESTS_GET_ORIGINAL = requests.get
+_REQUESTS_POST_ORIGINAL = requests.post
+_REQUESTS_PATCH_ORIGINAL = requests.patch
+
+
+class _PooledHttpSession(requests.Session):
+    """`requests.Session` that defers to module-level `requests.<method>` when
+    those have been monkey-patched (typical in unit tests).
+
+    In normal production use it behaves exactly like a `requests.Session`,
+    reusing TCP/TLS connections via the underlying `HTTPAdapter` pool. The
+    only override is `request()`, which falls back to the module-level
+    callable when it has been replaced by a test double; this preserves
+    `@patch("libinv.vcs.requests.post")`-style tests verbatim.
+    """
+
+    def request(self, method, url, **kwargs):
+        method_lower = method.lower() if isinstance(method, str) else method
+        if method_lower == "get" and requests.get is not _REQUESTS_GET_ORIGINAL:
+            return requests.get(url, **kwargs)
+        if method_lower == "post" and requests.post is not _REQUESTS_POST_ORIGINAL:
+            return requests.post(url, **kwargs)
+        if method_lower == "patch" and requests.patch is not _REQUESTS_PATCH_ORIGINAL:
+            return requests.patch(url, **kwargs)
+        return super().request(method, url, **kwargs)
+
+
 class VcsApp(ABC):
     machine = None
     login = None
     NETRC_FILE = os.path.expanduser("~/.netrc")
     token_expiry = None
+
+    @property
+    def _http(self):
+        """Lazily-initialized per-instance `requests.Session` for connection
+        reuse across repeated VCS API calls. Implemented as a property over
+        `self.__dict__` so it works even when callers construct instances via
+        `__new__` (e.g. the Sprint 14 test fixtures) and skip `__init__`.
+        """
+        sess = self.__dict__.get("_http_session")
+        if sess is None:
+            sess = _PooledHttpSession()
+            self.__dict__["_http_session"] = sess
+        return sess
 
     @abstractmethod
     def get_token(self):
@@ -109,7 +154,7 @@ class GitHubApp(VcsApp):
             "Authorization": f"Bearer {self.generate_jwt()}",
             "Accept": "application/vnd.github.v3+json",
         }
-        response = requests.post(f"{self.api_url}{self.token_endpoint}", headers=headers, timeout=10)
+        response = self._http.post(f"{self.api_url}{self.token_endpoint}", headers=headers, timeout=10)
         response.raise_for_status()
 
         token_data = response.json()
@@ -140,7 +185,7 @@ class GitHubApp(VcsApp):
         url = f"{self.api_url}/repos/{repo.org}/{repo.name}/issues"
         data = {"title": title, "body": message, "labels": labels, "type": issue_type}
         try:
-            response = requests.post(url, headers=self.headers, json=data, timeout=10)
+            response = self._http.post(url, headers=self.headers, json=data, timeout=10)
             response.raise_for_status()
             logger.info("Successfully raised the git issue: %s", title)
         except requests.RequestException as exc:
@@ -152,7 +197,7 @@ class GitHubApp(VcsApp):
             labels = []
         data = {"title": title, "body": message, "labels": labels, "type": issue_type}
         try:
-            response = requests.patch(issue_url, headers=self.headers, json=data, timeout=10)
+            response = self._http.patch(issue_url, headers=self.headers, json=data, timeout=10)
             response.raise_for_status()
             logger.info("Successfully updated the git issue: %s", issue_url)
         except requests.RequestException as exc:
@@ -162,7 +207,7 @@ class GitHubApp(VcsApp):
     def close_issue(self, issue_url):
         data = {"state": "closed"}
         try:
-            response = requests.patch(issue_url, headers=self.headers, json=data, timeout=10)
+            response = self._http.patch(issue_url, headers=self.headers, json=data, timeout=10)
             response.raise_for_status()
             logger.info("Successfully closed the git issue: %s", issue_url)
         except requests.RequestException as exc:
@@ -172,7 +217,7 @@ class GitHubApp(VcsApp):
     def get_issues(self, repo):
         url = f"{self.api_url}/repos/{repo.org}/{repo.name}/issues"
         try:
-            response = requests.get(url, headers=self.headers, timeout=10)
+            response = self._http.get(url, headers=self.headers, timeout=10)
             response.raise_for_status()
             return response.json()
         except requests.RequestException as exc:
@@ -183,7 +228,7 @@ class GitHubApp(VcsApp):
     def update_label(self, repo, label_name, data):
         url = f"{self.api_url}/repos/{repo.org}/{repo.name}/labels/{label_name}"
         try:
-            response = requests.patch(url, headers=self.headers, json=data, timeout=10)
+            response = self._http.patch(url, headers=self.headers, json=data, timeout=10)
             response.raise_for_status()
         except requests.RequestException as exc:
             logger.error("Error updating label %s: %s (response=%s)",

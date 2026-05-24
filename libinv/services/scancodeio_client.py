@@ -2,29 +2,31 @@
 HTTP client for ScanCode.io's REST API.
 
 Replaces the SQL-reflection coupling in ``libinv/scio_models.py`` with a
-typed, versioned HTTP contract. Implemented in stages — this module
-currently provides the interface and stubbed methods (NotImplementedError)
-so callers can incrementally migrate. The real HTTP calls land in a
-future sprint.
+typed, versioned HTTP contract. Sprint 15 wires each stub to the real
+scancodeio REST endpoints (verified against the vendored
+``scancode.io/scanpipe/api/views.py`` submodule).
 
-The endpoint shape assumed by this client (verified against
-``scancode.io/scanpipe/api/views.py`` ``ProjectViewSet``):
+Endpoint map (verified against ``scancode.io/scanpipe/api/views.py``
+``ProjectViewSet`` and ``scancode.io/scanpipe/filters.py``):
 
-- ``GET /api/projects/<uuid>/``                  → project metadata
-- ``GET /api/projects/<uuid>/packages/``         → list discovered packages
-                                                   (paginated DRF response)
-- ``GET /api/projects/?wasp_uuid_id=<uuid>``     → projects linked to a wasp
-                                                   (requires an upstream filter
-                                                   addition; see TODO below)
+- ``GET /api/projects/<uuid>/``                  -> project metadata
+- ``GET /api/projects/<uuid>/packages/``         -> list discovered packages
+                                                   (paginated DRF response;
+                                                   ``is_vulnerable=yes`` filter)
+- ``GET /api/projects/?wasp_uuid_id=<uuid>``     -> projects linked to a wasp
+                                                   (upstream filterset does NOT
+                                                   include ``wasp_uuid_id`` --
+                                                   see TODO below)
 
-There is **no** dedicated severity-counts endpoint upstream today; the
-current SQL aggregate in ``libinv/models.py`` must either be re-implemented
-client-side (loop over ``affected_by_vulnerabilities`` from
-``list_discovered_packages``) or added as a custom action upstream.
+There is **no** dedicated severity-counts or vulnerability-count endpoint
+upstream today; ``get_severity_counts``, ``get_vulnerability_count`` and
+``list_cve_ids_for_project`` aggregate client-side by paging through
+``list_discovered_packages``. A dedicated server-side endpoint would be
+materially faster -- see ``TODO(server-endpoint)`` comments below.
 
 Activation: set the environment variable ``LIBINV_SCIO_USE_HTTP=true``.
 When unset, callers retain the existing ``scio_models.py`` reflection
-path; this client is **inactive scaffolding** until Sprint 15+.
+path; this client is **inactive scaffolding** until callers are migrated.
 """
 
 from __future__ import annotations
@@ -32,7 +34,9 @@ from __future__ import annotations
 import logging
 import os
 from typing import Any
+from typing import Dict
 from typing import Iterable
+from typing import Iterator
 from typing import List
 from typing import Optional
 from typing import TypedDict
@@ -80,6 +84,54 @@ class ScanpipeProjectDTO(TypedDict, total=False):
 
 
 # ---------------------------------------------------------------------------
+# Exceptions
+# ---------------------------------------------------------------------------
+
+
+class ScancodeioError(Exception):
+    """Base error for all scancodeio HTTP client failures."""
+
+
+class ScancodeioNotFound(ScancodeioError):
+    """Raised on HTTP 404 from the scancodeio REST API."""
+
+
+# ---------------------------------------------------------------------------
+# Severity classification (mirrors the SQL CTE in libinv/models.py)
+# ---------------------------------------------------------------------------
+
+# Order matters: the SQL CTE returns severities in this canonical order.
+_SEVERITY_LEVELS = ("critical", "high", "medium", "low", "unknown")
+
+
+def _classify_severity(vulns: List[dict]) -> str:
+    """Return the highest severity level represented in a vulnerabilities list.
+
+    Mirrors the CASE expression in
+    ``libinv/models.py::ActionablePackageAvailableVersion.vulnerability_severities``::
+
+        CRITICAL -> critical
+        HIGH     -> high
+        MEDIUM / MODERATE -> medium
+        LOW      -> low
+        otherwise -> unknown
+
+    The check is against the string representation of each list element,
+    matching ``elem::varchar LIKE '%CRITICAL%'`` semantics from the CTE.
+    """
+    haystack = repr(vulns).upper()
+    if "CRITICAL" in haystack:
+        return "critical"
+    if "HIGH" in haystack:
+        return "high"
+    if "MEDIUM" in haystack or "MODERATE" in haystack:
+        return "medium"
+    if "LOW" in haystack:
+        return "low"
+    return "unknown"
+
+
+# ---------------------------------------------------------------------------
 # Client
 # ---------------------------------------------------------------------------
 
@@ -88,8 +140,7 @@ class ScancodeioClient:
     """Stateless HTTP client for the queries libinv makes against scancodeio.
 
     Every method here corresponds 1:1 with a SQL/ORM access pattern catalogued
-    in ``docs/scancodeio_contract.md``. Methods raise ``NotImplementedError``
-    today; real implementations land in Sprint 15+.
+    in ``docs/scancodeio_contract.md``.
     """
 
     def __init__(
@@ -103,7 +154,61 @@ class ScancodeioClient:
         self._timeout = timeout
         self._session = requests.Session()
         if api_key:
+            # scancodeio uses DRF TokenAuthentication; header format is
+            # exactly ``Authorization: Token <key>`` (see
+            # scancode.io/scancodeio/settings.py REST_FRAMEWORK config).
             self._session.headers["Authorization"] = f"Token {api_key}"
+
+    # ------------------------------------------------------------------
+    # Internal helpers
+    # ------------------------------------------------------------------
+
+    def _request_json(
+        self,
+        url: str,
+        params: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """GET ``url`` and return parsed JSON, mapping HTTP failures to
+        typed exceptions.
+
+        - 404 -> ``ScancodeioNotFound`` (callers may want to treat missing
+          projects differently than other failures).
+        - 5xx -> log + re-raise as ``ScancodeioError``.
+        - Connection errors / timeouts -> wrap as ``ScancodeioError`` with
+          the request URL in the message for debuggability.
+        """
+        try:
+            resp = self._session.get(url, params=params, timeout=self._timeout)
+        except requests.exceptions.RequestException as exc:
+            # Connection refused, DNS failure, timeout, etc. -- wrap with
+            # context so the caller doesn't have to guess which call failed.
+            raise ScancodeioError(
+                f"scancodeio request failed for {url}: {exc}"
+            ) from exc
+
+        if resp.status_code == 404:
+            raise ScancodeioNotFound(
+                f"scancodeio resource not found: {url}"
+            )
+
+        if 500 <= resp.status_code < 600:
+            logger.error(
+                "scancodeio server error %s for %s: %s",
+                resp.status_code,
+                url,
+                resp.text[:500],
+            )
+            # raise_for_status produces a clear chained traceback; wrap so
+            # callers can catch a single base class.
+            try:
+                resp.raise_for_status()
+            except requests.exceptions.HTTPError as exc:
+                raise ScancodeioError(
+                    f"scancodeio {resp.status_code} for {url}"
+                ) from exc
+
+        resp.raise_for_status()
+        return resp.json()
 
     # ------------------------------------------------------------------
     # Project-level reads
@@ -112,34 +217,60 @@ class ScancodeioClient:
     def get_project(self, project_uuid: str) -> ScanpipeProjectDTO:
         """Return project metadata.
 
-        Replaces direct ORM access to ``ScanpipeProject`` (the reflected
-        model in ``libinv/scio_models.py``).
+        Wraps ``GET /api/projects/<uuid>/`` (the retrieve action provided by
+        ``mixins.RetrieveModelMixin`` on ``ProjectViewSet`` --
+        ``scancode.io/scanpipe/api/views.py``).
         """
-        raise NotImplementedError(
-            "Sprint 15+ — wire to GET /api/projects/<uuid>/"
-        )
+        url = f"{self._base_url}/api/projects/{project_uuid}/"
+        return self._request_json(url)
 
     def list_projects_for_wasp(self, wasp_uuid: str) -> List[ScanpipeProjectDTO]:
         """Return every scanpipe project whose ``wasp_uuid_id`` matches.
 
-        Replaces the JOIN in ``libinv/api/compare_builds.py``::
-
-            session.query(Wasp).join(
-                ScanpipeProject, ScanpipeProject.wasp_uuid_id == Wasp.uuid
-            )
+        Replaces the JOIN in ``libinv/api/compare_builds.py``.
 
         NOTE: ``wasp_uuid_id`` is a SupplyShield-specific column added to
-        ``scanpipe_project`` — the upstream filter set may need to be
-        extended before this endpoint accepts ``?wasp_uuid_id=...``.
+        ``scanpipe_project``; the upstream ``ProjectFilterSet`` (see
+        ``scancode.io/scanpipe/api/views.py``, ``Meta.fields``) does NOT
+        accept it as a filter parameter. Wiring this to a real call without
+        first extending the upstream filterset would silently return the
+        unfiltered project list -- worse than failing loudly. Leaving as
+        NotImplementedError until either:
+
+        1. an upstream patch adds ``wasp_uuid_id`` to ``ProjectFilterSet``,
+           or
+        2. a SupplyShield-side proxy endpoint is added that handles the
+           filter.
         """
+        # TODO(server-endpoint): wire to GET /api/projects/?wasp_uuid_id=<uuid>
+        # once ProjectFilterSet (scanpipe/api/views.py) supports the param.
         raise NotImplementedError(
-            "Sprint 15+ — wire to GET /api/projects/?wasp_uuid_id=<uuid> "
-            "(requires upstream filterset support for wasp_uuid_id)"
+            "Upstream ProjectFilterSet does not accept ``wasp_uuid_id``. "
+            "Extend ProjectFilterSet upstream or add a SupplyShield-side "
+            "endpoint before enabling this method."
         )
 
     # ------------------------------------------------------------------
     # Discovered packages
     # ------------------------------------------------------------------
+
+    def _packages_url(self, project_uuid: str) -> str:
+        return f"{self._base_url}/api/projects/{project_uuid}/packages/"
+
+    def _packages_initial_params(
+        self,
+        only_vulnerable: bool,
+    ) -> Dict[str, Any]:
+        """Build the initial query params for the packages endpoint.
+
+        ``is_vulnerable=yes`` matches the upstream ``IsVulnerable`` filter
+        (``scancode.io/scanpipe/filters.py`` line ~620), which filters on
+        ``affected_by_vulnerabilities`` not being empty.
+        """
+        params: Dict[str, Any] = {"page_size": 1000}
+        if only_vulnerable:
+            params["is_vulnerable"] = "yes"
+        return params
 
     def list_discovered_packages(
         self,
@@ -148,36 +279,39 @@ class ScancodeioClient:
     ) -> List[DiscoveredPackageDTO]:
         """Return every discovered package for the given scancodeio project.
 
-        Replaces::
+        Wraps ``GET /api/projects/<uuid>/packages/`` (the ``packages``
+        ``@action`` on ``ProjectViewSet`` -- paginated via DRF). Follows
+        the ``next`` cursor until exhausted.
 
-            session.query(DiscoveredPackage)
-                .filter(DiscoveredPackage.project_id == uuid)
-                .all()
-
-        When ``only_vulnerable=True``, equivalent to additionally filtering
-        ``affected_by_vulnerabilities != '[]'``. The upstream endpoint
-        ``GET /api/projects/<uuid>/packages/`` is paginated; the
-        implementation must follow ``next`` links until exhausted.
+        When ``only_vulnerable=True``, sends ``is_vulnerable=yes`` (matches
+        the upstream ``IsVulnerable`` filter on ``PackageFilterSet``).
         """
-        raise NotImplementedError(
-            "Sprint 15+ — wire to GET /api/projects/<uuid>/packages/ "
-            "(follow pagination cursor)"
-        )
+        return list(self.iter_discovered_packages(project_uuid, only_vulnerable))
 
     def iter_discovered_packages(
         self,
         project_uuid: str,
         only_vulnerable: bool = False,
-    ) -> Iterable[DiscoveredPackageDTO]:
+    ) -> Iterator[DiscoveredPackageDTO]:
         """Generator variant of ``list_discovered_packages``.
 
-        Preferable for the EPSS batch job, which walks thousands of
-        projects and only needs a CVE set; materialising every package
-        for every project at once is wasteful.
+        Yields packages one at a time so the EPSS batch job (and similar
+        long walks over many projects) can stream instead of materialising
+        every package up front.
         """
-        raise NotImplementedError(
-            "Sprint 15+ — yield discovered packages page-by-page"
+        url: Optional[str] = self._packages_url(project_uuid)
+        params: Optional[Dict[str, Any]] = self._packages_initial_params(
+            only_vulnerable
         )
+        while url:
+            data = self._request_json(url, params=params)
+            for pkg in data.get("results", []):
+                yield pkg
+            # DRF's PageNumberPagination returns the next absolute URL with
+            # the query string baked in -- do not re-send params on the
+            # follow-up request or we'd double the page_size param.
+            url = data.get("next")
+            params = None
 
     # ------------------------------------------------------------------
     # Derived aggregates
@@ -187,10 +321,9 @@ class ScancodeioClient:
         """Return per-severity vulnerability counts for the project.
 
         Replaces the raw ``text(...)`` CTE in
-        ``libinv/models.py::ActionablePackageAvailableVersion.vulnerability_severities``
-        which scans ``scanpipe_discoveredpackage.affected_by_vulnerabilities``.
+        ``libinv/models.py::ActionablePackageAvailableVersion.vulnerability_severities``.
 
-        Return shape::
+        Result shape::
 
             [
                 {"severity_level": "critical", "count": 4},
@@ -200,40 +333,71 @@ class ScancodeioClient:
                 {"severity_level": "unknown",  "count": 0},
             ]
 
-        Recommended strategy: aggregate client-side from
-        ``list_discovered_packages`` until a dedicated upstream endpoint
-        exists; the math is trivial and avoids an upstream patch.
+        The five severity buckets are always present (count=0 if absent),
+        matching the upstream CTE that LEFT JOINs against a VALUES table.
+
+        TODO(server-endpoint): the SQL CTE aggregates in the database in a
+        single round trip; doing the same over HTTP requires paging the
+        full package list. Add ``GET /api/projects/<uuid>/severity-counts/``
+        upstream so this can be a constant-time call.
         """
-        raise NotImplementedError(
-            "Sprint 15+ — aggregate client-side from list_discovered_packages, "
-            "or wire to a future GET /api/projects/<uuid>/severity-counts/"
-        )
+        counts: Dict[str, int] = {level: 0 for level in _SEVERITY_LEVELS}
+        for pkg in self.iter_discovered_packages(
+            project_uuid, only_vulnerable=True
+        ):
+            vulns = pkg.get("affected_by_vulnerabilities") or []
+            if not vulns:
+                continue
+            level = _classify_severity(vulns)
+            counts[level] = counts.get(level, 0) + 1
+        return [
+            {"severity_level": level, "count": counts[level]}
+            for level in _SEVERITY_LEVELS
+        ]
 
     def get_vulnerability_count(self, project_uuid: str) -> int:
         """Return the total vulnerability count across the project.
 
         Replaces the ``func.sum(func.jsonb_array_length(...))`` query in
-        ``libinv/models.py::_get_vulnerabilities_count``. Computable
-        client-side as ``sum(len(p["affected_by_vulnerabilities"]) for p in
-        list_discovered_packages(uuid))``.
+        ``libinv/models.py::_get_vulnerabilities_count``: sum of
+        ``len(affected_by_vulnerabilities)`` across every discovered
+        package that has at least one vulnerability.
+
+        TODO(server-endpoint): same as ``get_severity_counts`` -- a
+        server-side aggregate would avoid paging the whole package list.
         """
-        raise NotImplementedError(
-            "Sprint 15+ — sum len(affected_by_vulnerabilities) over packages"
-        )
+        total = 0
+        for pkg in self.iter_discovered_packages(
+            project_uuid, only_vulnerable=True
+        ):
+            vulns = pkg.get("affected_by_vulnerabilities") or []
+            total += len(vulns)
+        return total
 
     def list_cve_ids_for_project(self, project_uuid: str) -> List[str]:
         """Return every ``CVE-*`` id referenced by the project's discovered packages.
 
-        Replaces the nested Python loop in ``libinv/cli/epss.py`` and the
-        equivalent loop in
-        ``libinv/api/actionable/package_details.py``. Each discovered
-        package's ``affected_by_vulnerabilities`` is a JSONB list of
-        VulnerableCode dicts; CVE ids appear in the ``aliases`` field.
+        Replaces the nested Python loop in ``libinv/cli/epss.py`` and
+        ``libinv/api/actionable/package_details.py``: each discovered
+        package's ``affected_by_vulnerabilities`` is a list of
+        VulnerableCode dicts; CVE ids appear inside ``aliases``.
+
+        De-duplicates and returns a sorted list for deterministic output.
+
+        TODO(server-endpoint): could be a single
+        ``GET /api/projects/<uuid>/cves/`` call upstream.
         """
-        raise NotImplementedError(
-            "Sprint 15+ — derive client-side from list_discovered_packages, "
-            "extracting aliases that start with 'CVE-'"
-        )
+        seen: set = set()
+        for pkg in self.iter_discovered_packages(
+            project_uuid, only_vulnerable=True
+        ):
+            vulns = pkg.get("affected_by_vulnerabilities") or []
+            for vuln in vulns:
+                aliases = vuln.get("aliases") or []
+                for alias in aliases:
+                    if isinstance(alias, str) and alias.startswith("CVE-"):
+                        seen.add(alias)
+        return sorted(seen)
 
 
 # ---------------------------------------------------------------------------
@@ -244,7 +408,7 @@ class ScancodeioClient:
 def get_default_client() -> Optional[ScancodeioClient]:
     """Return a singleton-style client, or ``None`` if HTTP mode is off.
 
-    The HTTP path is opt-in until Sprint 15+ has migrated every caller. If
+    The HTTP path is opt-in until every caller has migrated. If
     ``LIBINV_SCIO_USE_HTTP`` is unset (or set to anything other than a
     truthy literal), callers fall back to the legacy SQL reflection
     exported by ``libinv/scio_models.py``.
@@ -271,6 +435,8 @@ def get_default_client() -> Optional[ScancodeioClient]:
 __all__ = [
     "DiscoveredPackageDTO",
     "ScancodeioClient",
+    "ScancodeioError",
+    "ScancodeioNotFound",
     "ScanpipeProjectDTO",
     "SeverityCountDTO",
     "get_default_client",

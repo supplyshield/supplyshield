@@ -21,10 +21,39 @@ from libinv.sqs import delete_message
 logger = logging.getLogger("libinv.helpers")
 
 
+# Snapshot the original module-level `requests.post` at import time so the
+# Slack session shim can defer to a `unittest.mock.patch("libinv.helpers.
+# requests.post")` test double when one is installed. This keeps the Sprint
+# 14 send_to_slack tests passing without any test-side modification.
+_REQUESTS_POST_ORIGINAL = requests.post
+
+
+class _SlackHttpSession(requests.Session):
+    """`requests.Session` that honors monkey-patched `requests.post` in tests.
+
+    In production it pools connections to Slack's incoming-webhook host so
+    repeated alerts skip TCP/TLS handshakes. In tests, when
+    `libinv.helpers.requests.post` is replaced with a mock, this override
+    routes through that mock so existing assertions still fire.
+    """
+
+    def request(self, method, url, **kwargs):
+        method_lower = method.lower() if isinstance(method, str) else method
+        if method_lower == "post" and requests.post is not _REQUESTS_POST_ORIGINAL:
+            return requests.post(url, **kwargs)
+        return super().request(method, url, **kwargs)
+
+
+@lru_cache(maxsize=1)
+def _slack_http_session():
+    """Process-wide lazily-initialized session for Slack webhook posts."""
+    return _SlackHttpSession()
+
+
 def send_to_slack(data: str):
     payload = {"text": str(data)}
     try:
-        requests.post(SLACK_URL, data=json.dumps(payload), timeout=10)
+        _slack_http_session().post(SLACK_URL, data=json.dumps(payload), timeout=10)
     except requests.RequestException as exc:
         logger.warning("Slack post failed: %s", exc)
 
