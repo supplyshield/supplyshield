@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+from collections import defaultdict
 
 import click
 from sqlalchemy import func
@@ -15,6 +16,24 @@ from libinv.services.scancodeio_client import get_default_client
 logger = logging.getLogger(__name__)
 
 
+def _extract_cves_from_vulns(vulns) -> set[str]:
+    """Pull uppercased ``CVE-*`` aliases out of a row's affected_by_vulnerabilities JSON.
+
+    Lifted out so both the HTTP and SQL paths share the same parsing /
+    error-logging contract.
+    """
+    result: set[str] = set()
+    for vuln in vulns or []:
+        try:
+            aliases = vuln.get("aliases", [])
+            for alias in aliases:
+                if alias.startswith("CVE-"):
+                    result.add(alias.upper())
+        except (AttributeError, TypeError):
+            logger.error(f"Error processing vulnerability data: {vuln}")
+    return result
+
+
 def _collect_cves_for_projects(
     session,
     project_uuids: list[str],
@@ -26,11 +45,28 @@ def _collect_cves_for_projects(
     to direct SQL queries on ``DiscoveredPackage`` otherwise. The HTTP
     path raises ``ScancodeioError`` on per-project failure; we log and
     skip rather than abort the whole run.
+
+    Sprint 38.1: the SQL path now issues a single bulk ``WHERE project_id
+    IN (:ids)`` query and groups results by ``project_id`` for O(1) lookup,
+    eliminating the previous N+1 pattern.
     """
     cve_set: set[str] = set()
     http_client = get_default_client()
     total = len(project_uuids)
     last_percent = -1
+
+    # SQL bulk fetch: one query for the whole input set, grouped in Python.
+    # The HTTP path still issues one call per project because each project
+    # corresponds to a distinct upstream endpoint.
+    by_project: dict[str, list] = defaultdict(list)
+    if http_client is None and project_uuids:
+        rows = (
+            session.query(DiscoveredPackage)
+            .filter(DiscoveredPackage.project_id.in_(project_uuids))
+            .all()
+        )
+        for pkg in rows:
+            by_project[pkg.project_id].append(pkg)
 
     for idx, project_uuid in enumerate(project_uuids):
         if http_client is not None:
@@ -43,27 +79,10 @@ def _collect_cves_for_projects(
                     "HTTP CVE fetch failed for %s: %s", project_uuid, exc
                 )
         else:
-            # Legacy SQL path: unchanged behaviour when flag is unset.
-            discovered = (
-                session.query(DiscoveredPackage)
-                .filter(DiscoveredPackage.project_id == project_uuid)
-                .all()
-            )
-
-            for pkg in discovered:
+            # Legacy SQL path: O(1) lookup into the pre-grouped dict.
+            for pkg in by_project.get(project_uuid, []):
                 vulns = getattr(pkg, "affected_by_vulnerabilities", []) or []
-                for vuln in vulns:
-                    try:
-                        aliases = vuln.get("aliases", [])
-                        cve_ids = [
-                            alias for alias in aliases if alias.startswith("CVE-")
-                        ]
-                        for cid in cve_ids:
-                            cve_set.add(cid.upper())
-                    except (AttributeError, TypeError):
-                        logger.error(
-                            f"Error processing vulnerability data: {vuln}"
-                        )
+                cve_set.update(_extract_cves_from_vulns(vulns))
 
         if total:
             percent = int((idx + 1) * 100 / total)

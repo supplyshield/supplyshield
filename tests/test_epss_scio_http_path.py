@@ -50,9 +50,16 @@ def test_cli_epss_uses_http_client_when_flag_set(http_flag):
 
 def test_cli_epss_falls_back_to_sql_when_flag_unset():
     """Without the flag, ``get_default_client`` returns ``None``; SQL path
-    is used and GHSA aliases are filtered out."""
+    is used and GHSA aliases are filtered out.
+
+    Sprint 38.1: the SQL path now issues a single bulk ``WHERE project_id
+    IN (:ids)`` query and groups results by ``project_id`` in Python. The
+    mock must return a package whose ``project_id`` matches the input so
+    the grouping step finds it.
+    """
     fake_session = MagicMock()
     fake_pkg = MagicMock()
+    fake_pkg.project_id = "uuid-1"
     fake_pkg.affected_by_vulnerabilities = [
         {"aliases": ["CVE-2024-9999", "GHSA-xxxx"]},
     ]
