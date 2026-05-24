@@ -133,7 +133,7 @@ def process_sca_match_for_image(session: OrmSession, image, match):
         vulnerability = Vulnerability(id=vuln["id"])
         session.add(vulnerability)
 
-    vulnerability.set_desciption(vuln.get("description"))
+    vulnerability.set_description(vuln.get("description"))
     vulnerability.severity = vuln.get("severity")
     vulnerability.related = ",".join(v["id"] for v in match.get("relatedVulnerabilities"))
     if cvss:

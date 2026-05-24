@@ -15,12 +15,14 @@ def connect(
     image_name: str,
     image_digest: str,
     image_platform: str,
+    session=None,
 ):
+    s = session or conn
     commit = wasp.commit
     tag = wasp.tag
 
     image = None
-    existing_images = conn.query(Image).filter(
+    existing_images = s.query(Image).filter(
         Image.name == image_name,
         Image.account_id == account_id,
         Image.digest == image_digest,
@@ -52,31 +54,37 @@ def connect(
                 digest=image_digest,
                 platform=image_platform,
             )
-            conn.add(image)
-            conn.commit()
+            s.add(image)
+            s.commit()
             logger.debug(f"[*] Created image: {image}")
 
     # FIXME: sometimes different commits will trigger same image because of
     # empty commits, rebases etc. Think about an elegant solution for this
-    # update_safely(session=conn, model=image, attr="commit", value=commit)
+    # update_safely(session=s, model=image, attr="commit", value=commit)
     image.commit = commit
 
     repository = wasp.repository
     if repository:
-        update_safely(session=conn, model=image, attr="repository", value=repository)
+        update_safely(session=s, model=image, attr="repository", value=repository)
         logger.info(f"[+] {image} bridged to {repository}")
     else:
         logger.error(f"[!] Wasp {wasp} gave an invalid repository for {image}")
 
     image.wasp = wasp
-    conn.commit()
+    s.commit()
     logger.info(f"[+] Wasp {wasp} ate ecr image ({image})")
 
 
-def connect_using_queue_message_agreement(wasp: Wasp):
+def connect_using_queue_message_agreement(wasp: Wasp, session=None):
     """
-    Connect repository to its ECR image using data in wasp
+    Connect repository to its ECR image using data in wasp.
+
+    ``session`` is threaded through so the SQS handler in libinv.main can
+    open one session_scope per message; ``connect()`` still commits
+    per-image atomically inside the loop, preserving the original
+    failure semantics.
     """
+    s = session or conn
     message = json.loads(wasp.raw_message)
 
     for ecr_image in message["ecr_image"]:
@@ -87,11 +95,16 @@ def connect_using_queue_message_agreement(wasp: Wasp):
         account_id, _, _ = ecr_image["name"].partition(".")
         _, _, image_name = ecr_image["name"].rpartition("/")
         platform = f"{ecr_image['platform']['os']}/{ecr_image['platform']['architecture']}"
-        Account.ensure_exists(account_id=account_id, name=message["aws_environment"])
+        Account.ensure_exists(
+            account_id=account_id,
+            name=message["aws_environment"],
+            session=s,
+        )
         connect(
             wasp=wasp,
             account_id=account_id,
             image_name=image_name,
             image_digest=ecr_image["digest"],
             image_platform=platform,
+            session=s,
         )

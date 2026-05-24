@@ -45,7 +45,7 @@ def detect_and_update_base_image(session: OrmSession, image: Image):
     try:
         first_layer = image.sorted_layers[0]
     except IndexError:
-        logger.warn(f"No layer found for {image} {image.id}")
+        logger.warning(f"No layer found for {image} {image.id}")
         return False
 
     # TODO: check possiblilty of eager loading layers

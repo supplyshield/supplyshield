@@ -225,9 +225,13 @@ class Vulnerability(Base):
     nvd_cvss_impact_score = Column("nvd-cvss.impact_score", Float(precision=3))
     packages = relationship("VulnerabilityPackageAssociation", back_populates="vulnerability")
 
-    def set_desciption(self, desc: str):
+    def set_description(self, desc: str):
         if desc:
             self.description = desc[:MAX_LENGTH_VULNERABILITY_DESCRIPTION]
+
+    # Deprecated alias retained for backward compatibility; remove once
+    # all callers have migrated.
+    set_desciption = set_description
 
     def __str__(self):
         return self.id
@@ -381,7 +385,7 @@ class DeploymentCheckpoint(Base, TimestampMixin):
             session.add(old_checkpoint)
         checkpoint, _ = get_or_create(session, DeploymentCheckpoint, checkpoint=checkpoint)
         checkpoint.active = True
-        LatestImage.callibrate(session, checkpoint)
+        LatestImage.calibrate(session, checkpoint)
         session.add(checkpoint)
         session.commit()
         return checkpoint
@@ -406,9 +410,9 @@ class LatestImage(Base):
     )  # This helps to speed up joins with account table
 
     @classmethod
-    def callibrate(cls, session, checkpoint):
+    def calibrate(cls, session, checkpoint):
         """
-        Callibrate latest images as per given checkpoint. Images after the checkpoints are not
+        Calibrate latest images as per given checkpoint. Images after the checkpoints are not
         considered
         """
         session.execute(delete(LatestImage))
@@ -442,6 +446,10 @@ class LatestImage(Base):
            """
         )
         session.execute(stmt, {"checkpoint": checkpoint})
+
+    # Deprecated alias retained for backward compatibility; remove once
+    # all callers have migrated.
+    callibrate = calibrate
 
 
 class Secbug(Base, TimestampMixin):
@@ -1281,7 +1289,7 @@ class ActionablePackageAvailableVersion(Base):
         The function triggers a scan for the package and updates the results.
         """
         s = session or conn
-        logger.info(f"Scanningz: {self}")
+        logger.info(f"Scanning: {self}")
         if self.scan_status == "SUCCESS" and not is_rescan:
             logger.info(f"Scan already completed for: {self}")
             return

@@ -2,8 +2,6 @@
 -- PostgreSQL database dump
 --
 
-\restrict OGpOw5cgpr9CaXCX1DPnDB6QeuQjK3sdaQJNhweVYvbhLrinh6Bx199JHLPVEA5
-
 -- Dumped from database version 15.15 (Debian 15.15-1.pgdg13+1)
 -- Dumped by pg_dump version 15.15 (Debian 15.15-1.pgdg13+1)
 
@@ -976,6 +974,4 @@ ALTER TABLE ONLY libinv.wasps
 --
 -- PostgreSQL database dump complete
 --
-
-\unrestrict OGpOw5cgpr9CaXCX1DPnDB6QeuQjK3sdaQJNhweVYvbhLrinh6Bx199JHLPVEA5
 

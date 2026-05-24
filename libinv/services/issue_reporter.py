@@ -41,13 +41,13 @@ def _render_actionable_table(action_items, url_path):
             f"&version_in_use={action_item['current_version']}"
         )
         suggested_versions = action_item["suggested_versions"]
-        pacakge_name = PackageURL.from_string(action_item['full_package_url']).name
+        package_name = PackageURL.from_string(action_item['full_package_url']).name
         if not suggested_versions:
             suggested_versions = "\U0001f50d"
         else:
             suggested_versions = ", ".join(suggested_versions)
         rows += (
-            f"| {pacakge_name} "
+            f"| {package_name} "
             f"| {action_item['current_version']} "
             f"| [{suggested_versions}]({versions_url}) |\n"
         )

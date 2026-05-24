@@ -2,6 +2,7 @@ import json
 import logging
 import subprocess
 
+from libinv.base import session_scope
 from libinv.env import IMAGE_SCAN_ENABLED
 from libinv.helpers import send_to_slack
 from libinv.helpers import upload_to_s3
@@ -43,7 +44,8 @@ def process_sqs_message(message_metadata: dict):
                 try:
                     repository_dir = wasp.repo_dir
 
-                    connect_using_queue_message_agreement(wasp)
+                    with session_scope() as session:
+                        connect_using_queue_message_agreement(wasp, session=session)
 
                     cdx_file = run_cdxgen_scan(wasp)
                     cdx_s3_object_name = str(cdx_file.relative_to(wasp.cwd))
