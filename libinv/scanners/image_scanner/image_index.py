@@ -1,8 +1,8 @@
+from typing import Iterator
 from typing import Optional
 
 from attrs import define
 
-from libinv.models import Image
 from libinv.scanners.image_scanner.ecr import EcrClient
 from libinv.scanners.image_scanner.image_tarball import ImageNotFoundException
 from libinv.scanners.image_scanner.image_tarball import ImageTarBall
@@ -34,7 +34,7 @@ class ImageIndex:
         yield "linux/arm64"
         yield "linux/amd64"
 
-    def pull_images_if_not_exist(self) -> ["Image"]:
+    def pull_images_if_not_exist(self) -> Iterator["ImageTarBall"]:
         for platform in self.get_platforms():
             logger.info(f"Pulling image {self} for {platform}")
             try:

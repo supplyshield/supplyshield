@@ -124,7 +124,19 @@ class SarifResult:
             ruleid = sarif_row["ruleId"]
             extras = {}
             extras["message"] = sarif_row["message"]
-            extras["properties"] = self.rulemetadata[ruleid]
+            # Sprint 29: tolerate SARIF results whose ruleId isn't in the
+            # parsed rulemetadata (e.g. when the tool omits the `rules`
+            # array entirely, leaving rulemetadata empty). The previous
+            # subscript raised KeyError mid-iteration, dropping every
+            # subsequent finding in the run.
+            metadata = self.rulemetadata.get(ruleid, {})
+            if not metadata:
+                logger.warning(
+                    "SARIF ruleId %s missing from rulemetadata; "
+                    "downstream record fields will use defaults",
+                    ruleid,
+                )
+            extras["properties"] = metadata
             extras["region"] = sarif_row["locations"][0]["physicalLocation"]["region"]
 
             module = (

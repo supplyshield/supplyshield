@@ -93,5 +93,4 @@ disable_error_code = [
     "var-annotated",
     "attr-defined",
     "arg-type",
-    "valid-type",
 ]

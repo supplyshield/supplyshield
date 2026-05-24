@@ -390,3 +390,101 @@ def test_parsesarifmetadata_handles_missing_rules(tmp_path):
 
     # parsesarifmetadata returned an empty index instead of raising.
     assert sr.rulemetadata == {}
+
+
+# ---------------------------------------------------------------------------
+# 11. Sprint 29 - unknown ruleId in results doesn't crash mid-iteration.
+# ---------------------------------------------------------------------------
+def test_add_sarif_result_handles_unknown_rule_id(tmp_path):
+    """Sprint 29 - a SARIF result referencing a ruleId not in
+    rulemetadata should NOT crash mid-iteration.
+
+    When the SARIF tool omits the ``rules`` array (Sprint 28 made that
+    branch yield an empty ``rulemetadata`` instead of raising), the
+    subsequent ``add_sarif_result_to_db`` loop must still process every
+    result row. The previous ``self.rulemetadata[ruleid]`` subscript
+    raised ``KeyError`` on the first such row, dropping every later
+    finding in the run.
+    """
+    from libinv.scanners.repository_scanner.sast.SarifResult import SarifResult
+    from libinv.scanners.repository_scanner.sast.enums.ValidEnum import ValidEnum
+
+    sarif = {
+        "version": "2.1.0",
+        "$schema": "https://json.schemastore.org/sarif-2.1.0.json",
+        "runs": [
+            {
+                "tool": {"driver": {"name": "semgrep"}},  # no `rules` key
+                "results": [
+                    {
+                        "level": "error",
+                        "ruleId": "rule-unknown",  # not in rulemetadata
+                        "message": {"text": "vuln found"},
+                        "locations": [
+                            {
+                                "physicalLocation": {
+                                    "artifactLocation": {
+                                        "uri": "/base/app/foo.py"
+                                    },
+                                    "region": {
+                                        "startLine": 42,
+                                        "snippet": {
+                                            "text": "do_thing(user_input)"
+                                        },
+                                    },
+                                }
+                            }
+                        ],
+                    },
+                ],
+            }
+        ],
+    }
+    sarif_path = tmp_path / "unknown_rule.sarif"
+    sarif_path.write_text(json.dumps(sarif))
+
+    fake_session = MagicMock(name="injected_session")
+    # No existing SastResult row -> insert path.
+    fake_session.query.return_value.filter_by.return_value.first.return_value = None
+
+    source = MagicMock()
+    source.value = "semgrep"
+
+    sr = SarifResult(
+        _fake_config(), str(sarif_path), source, session=fake_session
+    )
+
+    # rulemetadata is empty (no `rules` key) - the previous code raised
+    # KeyError on the first result row's ruleId subscript.
+    assert sr.rulemetadata == {}
+
+    # Pre-populate the memo so the insert branch can resolve lob_id without
+    # going through add_lob_module (which is exercised in its own tests).
+    sr.memo_lob_id["pod-a::sub-a::rule-unknown"] = 1
+
+    # Force the default mode to return predictable values so the insert
+    # branch in add_sarif_result_to_db doesn't depend on real semgrep logic.
+    fake_module = MagicMock()
+    fake_module.get_vuln_paths.return_value = []
+    fake_module.get_publicpaths_priority.return_value = (
+        MagicMock(value="MEDIUM"),
+        {},
+    )
+    sr.rulesId_ModeParser["default"] = fake_module
+
+    # MUST NOT raise KeyError - the fix is `self.rulemetadata.get(ruleid, {})`.
+    sr.add_sarif_result_to_db()
+
+    # The finding was still persisted using default (empty) metadata.
+    assert fake_session.add.called, (
+        "expected SastResult.add() even when ruleId is absent from rulemetadata"
+    )
+    assert fake_session.commit.called, (
+        "expected commit() even when ruleId is absent from rulemetadata"
+    )
+
+    # And the inserted record carried an empty properties dict (the default),
+    # NOT a KeyError fallthrough.
+    inserted = fake_session.add.call_args[0][0]
+    assert inserted.extras["properties"] == {}
+    assert inserted.validated == str(ValidEnum.NOTVALIDATED.value)
