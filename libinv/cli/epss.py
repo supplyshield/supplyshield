@@ -4,12 +4,8 @@ import logging
 from collections import defaultdict
 
 import click
-from sqlalchemy import func
 
-from libinv.base import Session
 from libinv.cli.cli import cli
-from libinv.models import EPSS
-from libinv.models import ActionablePackageAvailableVersion
 from libinv.scio_models import DiscoveredPackage
 from libinv.services.scancodeio_client import get_default_client
 
@@ -118,94 +114,20 @@ def epss_update(
 ) -> None:
     """
     Update or insert EPSS scores for CVEs, only fetching from API if not present or stale (>30 days).
+
+    Sprint 43.1: the multi-step workflow lives in
+    ``libinv.services.epss.all_actionable_cves`` so it can be unit-tested
+    independently of Click. This command is now a thin delegation shell.
     """
-    if verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
+    from libinv.services.epss.all_actionable_cves import run_all_actionable_cves
 
-    cve_list = []
-    if all_actionable_cves:
-        click.echo("Collecting all unique CVEs from actionable packages...")
-        with Session() as session:
-            # First, get all scancode_project_uuid from actionable_package_available_version
-            from libinv.models import ActionablePackageAvailableVersion
-
-            project_uuids = (
-                session.query(ActionablePackageAvailableVersion.scancode_project_uuid)
-                .filter(ActionablePackageAvailableVersion.scancode_project_uuid.isnot(None))
-                .distinct()
-                .all()
-            )
-
-            project_uuids = [uuid[0] for uuid in project_uuids if uuid[0]]
-            click.echo(f"Found {len(project_uuids)} unique scancode project UUIDs.")
-
-            if not project_uuids:
-                click.echo(
-                    "No scancode project UUIDs found in actionable_package_available_version."
-                )
-                return
-
-            # Now fetch CVEs from scanpipe_discoveredpackage (or the HTTP
-            # client, if LIBINV_SCIO_USE_HTTP is set) using these project IDs.
-            cve_set = _collect_cves_for_projects(
-                session=session,
-                project_uuids=project_uuids,
-                verbose=verbose,
-            )
-
-            if not cve_set:
-                click.echo(
-                    "No CVEs found in scanpipe_discoveredpackage for the given project UUIDs."
-                )
-                return
-            cve_list = list(cve_set)
-    else:
-        # Collect CVE list from other options
-        if cve:
-            cve_list.append(cve.strip())
-        if cves:
-            cve_list.extend([c.strip() for c in cves.split(",") if c.strip()])
-        if file:
-            try:
-                with open(file, "r") as f:
-                    file_cves = [line.strip() for line in f if line.strip()]
-                    cve_list.extend(file_cves)
-            except Exception as e:
-                logger.error(f"Error reading file {file}: {e}")
-                return
-        if not cve_list:
-            click.echo(
-                "Error: No CVEs provided. Use --cve, --cves, --file, or --all-actionable-cves option."
-            )
-            logger.warning(
-                "Error: No CVEs provided. Use --cve, --cves, --file, or --all-actionable-cves option."
-            )
-            return
-    # Remove duplicates and validate format
-    unique_cves = list(set(cve_list))
-    valid_cves = [cve for cve in unique_cves if cve.upper().startswith("CVE-")]
-    invalid_cves = [cve for cve in unique_cves if not cve.upper().startswith("CVE-")]
-    if invalid_cves:
-        logger.warning(f"Invalid CVE format(s): {invalid_cves}")
-    if not valid_cves:
-        click.echo("Error: No valid CVE IDs provided.")
-        return
-    click.echo(f"Checking EPSS data for {len(valid_cves)} CVEs...")
-    logger.warning(f"Checking EPSS data for {len(valid_cves)} CVEs...")
-    with Session() as session:
-        # Use model method to handle all EPSS refresh logic
-        result = EPSS.refresh_cves(session, valid_cves, verbose=verbose, logger=logger)
-
-        click.echo(
-            f"Updated/inserted {result['updated']} CVEs. "
-            f"Skipped {result['skipped']} (already fresh). "
-            f"Failed {result['failed']}."
-        )
-        logger.warning(
-            f"Updated/inserted {result['updated']} CVEs. "
-            f"Skipped {result['skipped']} (already fresh). "
-            f"Failed {result['failed']}."
-        )
+    run_all_actionable_cves(
+        cve=cve,
+        cves=cves,
+        file=file,
+        verbose=verbose,
+        all_actionable_cves=all_actionable_cves,
+    )
 
 
 @cli.command("calculate-package-epss")
@@ -222,108 +144,12 @@ def calculate_package_epss(verbose: bool, batch_size: int) -> None:
     2. For each package, extracts CVEs from scanpipe_discoveredpackage using scancode_project_uuid
     3. Calculates the maximum EPSS score from those CVEs using the epss table
     4. Updates the package record with the max EPSS score
+
+    Sprint 43.2: the multi-step workflow lives in
+    ``libinv.services.epss.calculate_package_epss`` so it can be
+    unit-tested independently of Click. This command is now a thin
+    delegation shell.
     """
-    if verbose:
-        logging.getLogger().setLevel(logging.DEBUG)
+    from libinv.services.epss.calculate_package_epss import run_calculate_package_epss
 
-    with Session() as session:
-        # Get all packages with successful scans that have scancode_project_uuid
-        click.echo("Getting packages with successful scans...")
-
-        packages = (
-            session.query(ActionablePackageAvailableVersion)
-            .filter(ActionablePackageAvailableVersion.scan_status == "SUCCESS")
-            .filter(ActionablePackageAvailableVersion.scancode_project_uuid.isnot(None))
-            .all()
-        )
-
-        if not packages:
-            click.echo("No packages found with scan_status='SUCCESS' and scancode_project_uuid")
-            return
-
-        click.echo(f"Found {len(packages)} packages to process")
-
-        updated_count = 0
-        skipped_count = 0
-        failed_count = 0
-
-        # Process packages in batches
-        total_packages = len(packages)
-
-        for i in range(0, total_packages, batch_size):
-            batch_packages = packages[i : i + batch_size]
-            batch_end = min(i + batch_size, total_packages)
-            progress_pct = int((i / total_packages) * 100)
-
-            click.echo(
-                f"Processing packages {i + 1}-{batch_end} of {total_packages} ({progress_pct}%)"
-            )
-
-            for package in batch_packages:
-                try:
-                    # Get CVEs for this package from scanpipe_discoveredpackage
-                    discovered_packages = (
-                        session.query(DiscoveredPackage)
-                        .filter(DiscoveredPackage.project_id == package.scancode_project_uuid)
-                        .all()
-                    )
-
-                    # Extract CVEs using model helper
-                    cve_set = package.get_cves(session)
-
-                    if not cve_set:
-                        if verbose:
-                            click.echo(f"{package.package_url}@{package.version}: No CVEs found")
-                        skipped_count += 1
-                        continue
-
-                    # Get EPSS scores for these CVEs
-                    epss_records = session.query(EPSS).filter(EPSS.cve.in_(list(cve_set))).all()
-
-                    if not epss_records:
-                        if verbose:
-                            click.echo(
-                                f"{package.package_url}@{package.version}: No EPSS data found for {len(cve_set)} CVEs"
-                            )
-                        skipped_count += 1
-                        continue
-
-                    # Calculate maximum EPSS score
-                    max_epss_score = max(record.epss_score for record in epss_records)
-
-                    # Update package with max EPSS score
-                    package.epss_score = max_epss_score
-                    session.add(package)
-
-                    if verbose:
-                        click.echo(
-                            f"{package.package_url}@{package.version}: Max EPSS = {max_epss_score:.6f} (from {len(epss_records)}/{len(cve_set)} CVEs)"
-                        )
-
-                    updated_count += 1
-
-                except Exception as e:
-                    logger.error(f"Error processing package {package.uuid}: {e}")
-                    if verbose:
-                        click.echo(f"{package.package_url}@{package.version}: Error - {e}")
-                    failed_count += 1
-
-            # Commit batch
-            try:
-                session.commit()
-                if verbose:
-                    click.echo(f"Batch committed successfully")
-            except Exception as e:
-                logger.error(f"Error committing batch: {e}")
-                session.rollback()
-                click.echo(f"Batch commit failed: {e}")
-
-        # Final summary
-        click.echo(f"\n✅ Processing complete!")
-        click.echo(f"Updated: {updated_count} packages")
-        click.echo(f"Skipped: {skipped_count} packages (no CVEs or EPSS data)")
-        click.echo(f"Failed: {failed_count} packages")
-
-        logger.info(
-            f"EPSS calculation complete. Updated: {updated_count}, Skipped: {skipped_count}, Failed: {failed_count}"
-        )
+    run_calculate_package_epss(verbose=verbose, batch_size=batch_size)
