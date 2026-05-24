@@ -1,5 +1,6 @@
 import json
 
+from libinv.api.metrics import scan_invocations_total
 from libinv.base import conn
 from libinv.models import Account
 from libinv.models import Image
@@ -84,6 +85,9 @@ def connect_using_queue_message_agreement(wasp: Wasp, session=None):
     per-image atomically inside the loop, preserving the original
     failure semantics.
     """
+    # Sprint 25: count one invocation per SQS bridge message. Increment
+    # BEFORE parsing so a malformed message still surfaces in the metric.
+    scan_invocations_total.labels(type="repository_bridge").inc()
     s = session or conn
     message = json.loads(wasp.raw_message)
 

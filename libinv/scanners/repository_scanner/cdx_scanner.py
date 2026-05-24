@@ -3,6 +3,7 @@ import os
 import re
 from pathlib import Path
 
+from libinv.api.metrics import scan_invocations_total
 from libinv.env import BASE_IMAGE_JAVA_VERSION_MAPPING
 from libinv.env import CDXGEN_BIN
 from libinv.env import GO_PRIVATE
@@ -214,6 +215,11 @@ def run_cdxgen_scan(wasp: Wasp, exclude: list = []):
     """
     Return generated cdx filename after scanning given repo_dir
     """
+    # Sprint 25: cdxgen is a sub-step of a repository scan but it has its
+    # own failure modes and runtime profile worth observing independently,
+    # so it gets its own label rather than being lumped into
+    # "repository_bridge". Increment before any work so crashes count.
+    scan_invocations_total.labels(type="cdxgen").inc()
     logger.debug("Running cdxgen scan")
     repo_dir = wasp.repo_dir
     scanner = CdxScanner(repo_dir)

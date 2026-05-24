@@ -2,6 +2,7 @@ import os
 
 import boto3
 
+from libinv.api.metrics import scan_invocations_total
 from libinv.base import session_scope
 from libinv.helpers import get_boto3_client
 from libinv.scanners.image_scanner.base_image import detect_and_update_base_image
@@ -60,6 +61,11 @@ def scan_ecr_image(image_name, image_digest, account_id, credentials=None):
 
 
 def scan_image_index(image_index: ImageIndex, account_id: str):
+    # Sprint 25: count one invocation per top-level image scan. Increment
+    # BEFORE the work so crashes still register. All three public entry
+    # points (scan_orgsre_image / scan_dockerhub_image / scan_ecr_image)
+    # funnel here, so this is the single chokepoint — no double-counting.
+    scan_invocations_total.labels(type="image").inc()
     for image_tar in image_index.pull_images_if_not_exist():
         logger.info(
             "Processing %s, Size: %s, Fresh: %s",

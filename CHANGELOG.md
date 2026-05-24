@@ -1,7 +1,7 @@
 # Changelog
 
 All notable changes to SupplyShield. This file documents the audit-driven
-refactor across sprints 0-16, each landed as a separate commit on the
+refactor across sprints 0-24, each landed as a separate commit on the
 `sprint-0/critical-fixes` branch. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -9,7 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Sprint numbers in parentheses link a bullet back to its originating commit
 for traceability.
 
-## [Unreleased] — Sprints 0-16
+## [Unreleased] — Sprints 0-24
 
 ### Security
 
@@ -136,6 +136,16 @@ for traceability.
 - **`explode_git_url`** — Rewritten with `if/elif/else` and now raises
   `ValueError` on unsupported scheme (was `UnboundLocalError`). 4 doctests
   including `ssh`, `https`, `ssh-no-.git`, and `ftp-error` cases (Sprint 1).
+- **`cli/actionable.py` union-attr latent bugs** — 4 union-attr issues
+  flagged by mypy fixed. Guards added around optional attribute access on
+  values that could be `None` at runtime (Sprint 20).
+- **`api/actionable/package_details.py` `libinv.logger` AttributeError** —
+  Fixed latent bug where `libinv.logger` was referenced as a module attribute
+  without the proper import path; would have raised `AttributeError` on the
+  exception path (Sprint 22).
+- **`libinv/env.py` type inconsistencies** — `IMAGE_SCAN_ENABLED` and
+  `EXCLUDED_REPOS` had mismatched type annotations vs runtime values; both
+  reconciled (Sprint 24).
 
 ### Performance
 
@@ -306,6 +316,32 @@ for traceability.
   as `print`): the four print calls in `cli/checkpoint.py` and the
   `print(table)` in `cli/actionable.get_actionable_for`. `api/graph.py`
   and `helpers.py` had already been migrated in Sprint 1 (Sprint 16).
+- **`models.py` `session=None` family type hints** — Added type annotations
+  to the classmethod family that gained the `session=None` last-kwarg in
+  Sprint 7, completing the typing pass on the model layer (Sprint 17).
+- **mypy clean across `libinv/{base,models,services,api,scanners}`** —
+  Type-hint pass widened mypy's covered surface from Sprint 16's two
+  modules to the bulk of `libinv/`. All flagged issues fixed (Sprint 18).
+- **`SarifResult` session-injected** — Now threads an explicit `session`
+  through its constructor / methods instead of falling back to module-level
+  `conn`, completing the conn-purge pattern for the SARIF code path
+  (Sprint 20).
+- **Flask `app.py` + `wasp.py` routes use `ScopedSession()`** — Direct
+  call-site invocations of `ScopedSession()` replace residual `conn`
+  references; removes the Sprint 13 `_ConnDeprecationProxy` warnings these
+  routes were emitting on every request (Sprint 20).
+- **ScanCode.io HTTP client wired into `cli/epss.py`** — First production
+  caller migrated off `scio_models.py` reflection onto
+  `ScancodeioClient` from Sprint 14/15 (Sprint 21).
+- **ScanCode.io HTTP client wired into `models._get_vulnerabilities_count`
+  + `api/actionable/package_details.py`** — Second wave of SCIO HTTP
+  migrations; replaces direct SQL against the reflected schema
+  (Sprint 22).
+- **ScanCode.io HTTP client wired into `models.vulnerability_severities`**
+  — Last raw `text()` CTE against the SCIO database migrated to the HTTP
+  client. `compare_builds.py` is documented as a deliberate hold-out
+  (blocked on upstream `ProjectFilterSet` filter limitation, same root
+  cause as `list_projects_for_wasp`) (Sprint 23).
 
 ### Tests
 
@@ -406,9 +442,16 @@ for traceability.
   inbound `X-Request-Id` honored and echoed in the response; log record
   picks up the `contextvar`; `JsonFormatter` outputs valid JSON;
   default `"-"` preserved for non-Flask callers.
-- **Final test count** — 130 unit tests passing (up from 0 at Sprint 0
-  baseline; 38 after Sprint 3; 70 after Sprint 14; 125 after Sprint 15)
-  plus the gated integration suite.
+- **CLI command type annotations (Sprint 19)** — All `cli/` commands type-
+  annotated as part of the mypy-blocking enablement; tests pin the
+  contracts.
+- **`cli/daemon` + `cli/checkpoint` unit-test coverage (Sprint 24)** — Two
+  CLI modules previously without test coverage now have dedicated unit
+  tests.
+- **Final test count** — 175 unit tests + 18 integration tests = 193 tests
+  total (up from 0 at Sprint 0 baseline; 38 after Sprint 3; 70 after
+  Sprint 14; 125 after Sprint 15; 130 after Sprint 16) plus the gated
+  integration suite.
 
 ### Infrastructure
 
@@ -457,6 +500,36 @@ for traceability.
   `libinv/services/__init__.py`, `libinv/services/issue_reporter.py`
   (`_render_actionable_table`, `prepare_git_issue_content` typed), and
   cleanup pass on `libinv/services/scancodeio_client.py`.
+- **CI security tooling (Sprint 17)** — `mypy`, `bandit`, and `pip-audit`
+  added to `.github/workflows/linting.yml`. Initial run is informational;
+  Sprint 18 widens mypy coverage and Sprint 19 flips the mypy step to
+  blocking.
+- **Dependabot + pre-commit (Sprint 18)** — Dependabot config added for
+  pip / GitHub Actions ecosystems; `.pre-commit-config.yaml` added with
+  ruff / mypy / bandit hooks for local enforcement.
+- **Python 3.12 alignment (Sprint 18)** — `setup.cfg`, CI workflows, and
+  the `[tool.mypy]` block all pinned to `python_version = "3.12"`.
+- **Dropped duplicate / unused dependencies (Sprint 18)** — Duplicate
+  `psycopg2` and unused `mysqlclient` removed; `peewee` dropped in
+  Sprint 19 after grep confirmed zero callers.
+- **CI mypy step blocking (Sprint 19)** — The Sprint 17 informational mypy
+  step is now a build-failing check.
+- **Kubernetes `/healthz` + `/readyz` probes (Sprint 23)** — Liveness and
+  readiness endpoints registered on the Flask app so k8s can route
+  traffic only after the DB is reachable.
+
+### Observability
+
+- **Per-job request-ID for cron_scheduler (Sprint 21)** — `cron_scheduler`
+  mints a UUID per job and sets it on `request_id_var` (the Sprint 16
+  `contextvars` slot) so every log record under a cron job is correlated.
+- **CLI seeds `request_id_var` from `LIBINV_REQUEST_ID` (Sprint 22)** —
+  The CLI entry point reads `LIBINV_REQUEST_ID` from the environment and
+  seeds the contextvar, completing the cron-scheduler → child-process
+  correlation chain started in Sprint 21.
+- **Prometheus `/metrics` endpoint (Sprint 24)** — `prometheus_client`
+  integrated; `/metrics` exposes default process / GC collectors plus
+  application counters for scraping.
 
 ### Documentation
 
@@ -471,23 +544,31 @@ for traceability.
 - **`README.rst`** — Added Architecture, Configuration (audit-driven env
   vars), Testing, and Development sections reflecting the Sprint 0-16
   state. Existing Installation / Usage Guide / Architecture Diagram
-  sections untouched.
-- **`CHANGELOG.md`** — This file.
+  sections untouched. README + CHANGELOG initial landing (Sprint 17).
+- **Sphinx architecture + configuration pages (Sprint 21)** — New pages
+  under `docs/` cover the Sprint 0-20 architecture and environment-
+  variable surface.
+- **`CHANGELOG.md`** — This file (extended through Sprint 24).
 
 ### Deferred (audit follow-ups not yet landed)
 
 These were explicitly flagged across sprints as out-of-scope but are
 worth tracking. They are listed here to keep the audit trail honest.
 
-- Wire `mypy + bandit + pip-audit` into the CI workflow (Sprint 17 cand.).
+- ~~Wire `mypy + bandit + pip-audit` into the CI workflow~~ — landed in
+  Sprint 17; mypy made blocking in Sprint 19.
+- ~~Type hints on the remaining hot files (`models.py`, `api/*`,
+  `cli/*`).~~ — landed across Sprints 17-19.
 - Drop `from libinv.base import conn` imports across `libinv/` now that
-  the runtime `DeprecationWarning` proxy makes direct usage visible.
+  the runtime `DeprecationWarning` proxy makes direct usage visible
+  (partially addressed in Sprint 20 for the Flask app + SARIF paths;
+  remaining call sites still pending).
 - Materialized view `sca_actionable_items` recovery (still missing from
   alembic migrations).
-- `ScancodeioClient.list_projects_for_wasp` — blocked on upstream
-  `ProjectFilterSet.Meta.fields` extension or a SupplyShield-side proxy
-  endpoint.
-- Type hints on the remaining hot files (`models.py`, `api/*`, `cli/*`).
+- `ScancodeioClient.list_projects_for_wasp` and `compare_builds.py` SCIO
+  migration — both blocked on upstream `ProjectFilterSet.Meta.fields`
+  extension or a SupplyShield-side proxy endpoint. The blocker is
+  documented in-tree as of Sprint 23.
 - The single mypy error in `scancodeio_client.py:225` (`get_project`'s
   return-type narrowing on `_request_json`).
 - `total_repositories` scalar query in `statistics.py` — could be folded
