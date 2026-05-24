@@ -51,7 +51,7 @@ def actionables_v2():
     jenkins_url = "N/A"
 
     if not repository_id or not environment:
-        return jsonify({"error": "repository_id or env parameter missing"}), 500
+        return jsonify({"error": "repository_id or env parameter missing"}), 400
 
     repository = fetch_repository(repository_id)
     with Session() as session:
@@ -80,7 +80,8 @@ def actionables_v2():
                 package_type = parsed_purl.type
                 package_namespace = parsed_purl.namespace
                 package_name = parsed_purl.name
-            except:
+            except Exception as exc:
+                logger.exception("failed to parse purl for actionable package: %s", exc)
                 package_type = "unknown"
                 package_namespace = "N/A"
                 package_name = (
@@ -146,7 +147,7 @@ def actionables_v3():
     jenkins_url = "N/A"
 
     if not repository_id or not environment:
-        return jsonify({"error": "repository_id or env parameter missing"}), 500
+        return jsonify({"error": "repository_id or env parameter missing"}), 400
 
     repository = fetch_repository(repository_id)
 
@@ -176,7 +177,8 @@ def actionables_v3():
                 package_type = parsed_purl.type
                 package_namespace = parsed_purl.namespace
                 package_name = parsed_purl.name
-            except:
+            except Exception as exc:
+                logger.exception("failed to parse purl for actionable package: %s", exc)
                 package_type = "unknown"
                 package_namespace = "N/A"
                 package_name = (
@@ -270,7 +272,8 @@ def package_details():
             "version": version,
             "full_url": package_url,
         }
-    except:
+    except Exception as exc:
+        logger.exception("failed to parse purl for package_url=%s: %s", package_url, exc)
         package_info = {
             "type": "unknown",
             "namespace": "N/A",
@@ -1149,7 +1152,7 @@ def safe_upgrades():
     env = request.args.get("env", "prod")
 
     if not actionable_id or not version_in_use:
-        return jsonify({"error": "actionable_id or version_in_use parameter missing"}), 500
+        return jsonify({"error": "actionable_id or version_in_use parameter missing"}), 400
 
     results = []
     with Session() as session:

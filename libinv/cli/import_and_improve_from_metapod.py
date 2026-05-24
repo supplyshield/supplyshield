@@ -18,7 +18,13 @@ logger = logging.getLogger(__name__)
 
 
 def metapod_services():
-    return requests.get(SERVICE_METADATA_URL).json()["details"]
+    try:
+        resp = requests.get(SERVICE_METADATA_URL, timeout=15)
+        resp.raise_for_status()
+        return resp.json().get("details", [])
+    except requests.RequestException as exc:
+        logger.error("Failed to fetch metapod services: %s", exc)
+        return []
 
 
 def process_metapod_service(metapod_service):

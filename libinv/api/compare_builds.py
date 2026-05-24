@@ -1,3 +1,5 @@
+import logging
+
 from flask import Blueprint
 from flask import jsonify
 from flask import redirect
@@ -12,6 +14,8 @@ from libinv.api.actionable import fetch_repository
 from libinv.base import engine
 from libinv.models import Wasp
 from libinv.scio_models import ScanpipeProject
+
+logger = logging.getLogger(__name__)
 
 compare_builds = Blueprint("compare_builds", __name__, template_folder="templates")
 
@@ -38,8 +42,9 @@ def get_scancode_results(wasp_id):
             {"wasp_id": wasp_id},
         ).fetchall()
         return packages
-    except SQLAlchemyError as e:
-        return jsonify({"error": str(e)}), 500
+    except SQLAlchemyError:
+        logger.exception("get_scancode_results failed for wasp_id=%s", wasp_id)
+        raise
     finally:
         session.close()
 
@@ -63,11 +68,11 @@ def get_diff_builds():
     repository_id = request.args.get("repository_id")
     env = request.args.get("env")
     if not repository_id or not env:
-        return jsonify({"error": "repository_id or env parameter missing"}), 200
+        return jsonify({"error": "repository_id or env parameter missing"}), 400
 
     repository = fetch_repository(repository_id)
     if not repository:
-        return jsonify({"error": "Repository not found"}), 500
+        return jsonify({"error": "Repository not found"}), 404
 
     Session = sessionmaker(bind=engine)
     session = Session()
@@ -83,7 +88,7 @@ def get_diff_builds():
             .all()
         )
         if not wasps:
-            return jsonify({"error": "No wasps found"}), 500
+            return jsonify({"error": "No wasps found"}), 404
 
         wasp_left = request.args.get("wasp_left")
         wasp_right = request.args.get("wasp_right")
@@ -111,8 +116,9 @@ def get_diff_builds():
                 vulnerabilities_count_right=vulnerabilities_count_right,
                 title="BuildDiff",
             )
-    except SQLAlchemyError as e:
-        return jsonify({"error": str(e)}), 500
+    except SQLAlchemyError:
+        logger.exception("get_diff_builds failed for repository_id=%s env=%s", repository_id, env)
+        return jsonify({"error": "An error occurred. Check server logs."}), 500
     finally:
         session.close()
 

@@ -7,7 +7,6 @@ from abc import abstractmethod
 import jwt
 import requests
 from git import Repo
-from git.exc import GitError
 
 from libinv.env import BITBUCKET_APP_TOKEN
 from libinv.env import GITHUB_APP_APP_ID
@@ -107,9 +106,8 @@ class GitHubApp(VcsApp):
             "Authorization": f"Bearer {self.generate_jwt()}",
             "Accept": "application/vnd.github.v3+json",
         }
-        response = requests.post(f"{self.api_url}{self.token_endpoint}", headers=headers)
-
-        assert response.status_code == 201
+        response = requests.post(f"{self.api_url}{self.token_endpoint}", headers=headers, timeout=10)
+        response.raise_for_status()
 
         token_data = response.json()
         token = token_data.get("token")
@@ -133,62 +131,73 @@ class GitHubApp(VcsApp):
         token = jwt.encode(payload, self.private_key, algorithm="RS256")
         return token
 
-    def create_issue(self, repo, title, message, labels=[], type=""):
+    def create_issue(self, repo, title, message, labels=None, issue_type=""):
+        if labels is None:
+            labels = []
         url = f"{self.api_url}/repos/{repo.org}/{repo.name}/issues"
-        data = {"title": title, "body": message, "labels": labels, "type": type}
+        data = {"title": title, "body": message, "labels": labels, "type": issue_type}
         try:
-            response = requests.post(url, headers=self.headers, json=data)
-            assert response.status_code == 201
-            logger.info(f"Successfully raised the git issue: {title}")
-        except GitError as e:
-            logger.error(f"Error creating issue: {e}")
+            response = requests.post(url, headers=self.headers, json=data, timeout=10)
+            response.raise_for_status()
+            logger.info("Successfully raised the git issue: %s", title)
+        except requests.RequestException as exc:
+            logger.error("Error creating issue %s: %s (response=%s)",
+                         title, exc, getattr(exc.response, 'text', '')[:500])
 
-    def update_issue(self, issue_url, title, message, labels=[], type=""):
-        data = {"title": title, "body": message, "labels": labels, "type": type}
+    def update_issue(self, issue_url, title, message, labels=None, issue_type=""):
+        if labels is None:
+            labels = []
+        data = {"title": title, "body": message, "labels": labels, "type": issue_type}
         try:
-            response = requests.patch(issue_url, headers=self.headers, json=data)
-            assert response.status_code == 200
-            logger.info(f"Successfully updated the git issue: {issue_url}")
-        except GitError as e:
-            logger.error(f"Error creating issue: {e}")
+            response = requests.patch(issue_url, headers=self.headers, json=data, timeout=10)
+            response.raise_for_status()
+            logger.info("Successfully updated the git issue: %s", issue_url)
+        except requests.RequestException as exc:
+            logger.error("Error updating issue %s: %s (response=%s)",
+                         issue_url, exc, getattr(exc.response, 'text', '')[:500])
 
     def close_issue(self, issue_url):
         data = {"state": "closed"}
         try:
-            response = requests.patch(issue_url, headers=self.headers, json=data)
-            assert response.status_code == 200
-            logger.info(f"Successfully closed the git issue: {issue_url}")
-        except GitError as e:
-            logger.error(f"Error closing issue: {e}")
+            response = requests.patch(issue_url, headers=self.headers, json=data, timeout=10)
+            response.raise_for_status()
+            logger.info("Successfully closed the git issue: %s", issue_url)
+        except requests.RequestException as exc:
+            logger.error("Error closing issue %s: %s (response=%s)",
+                         issue_url, exc, getattr(exc.response, 'text', '')[:500])
 
     def get_issues(self, repo):
         url = f"{self.api_url}/repos/{repo.org}/{repo.name}/issues"
         try:
-            response = requests.get(url, headers=self.headers).json()
-            return response
-        except GitError as e:
-            logger.error(f"Error fetching issues: {e}")
+            response = requests.get(url, headers=self.headers, timeout=10)
+            response.raise_for_status()
+            return response.json()
+        except requests.RequestException as exc:
+            logger.error("Error fetching issues for %s/%s: %s (response=%s)",
+                         repo.org, repo.name, exc, getattr(exc.response, 'text', '')[:500])
             return None
 
     def update_label(self, repo, label_name, data):
         url = f"{self.api_url}/repos/{repo.org}/{repo.name}/labels/{label_name}"
         try:
-            requests.patch(url, headers=self.headers, json=data)
-        except GitError as e:
-            logger.error(f"Error fetching issues: {e}")
+            response = requests.patch(url, headers=self.headers, json=data, timeout=10)
+            response.raise_for_status()
+        except requests.RequestException as exc:
+            logger.error("Error updating label %s: %s (response=%s)",
+                         label_name, exc, getattr(exc.response, 'text', '')[:500])
             return None
 
     def get_sca_issue(self, repo):
-        """
-        Checks if an issue already exists in the GitHub repository.
-        """
+        """Return (issue_url, True) if an SCA-actionable issue already exists, else (None, False)."""
         issues = self.get_issues(repo)
+        if not issues:
+            return None, False
+        target_label = f"sca-actionable-{repo.name}"
         for issue in issues:
-            for label in issue["labels"]:
-                if label["name"] == f"sca-actionable-{repo.name}":
+            for label in issue.get("labels", []):
+                if label.get("name") == target_label:
                     return issue["url"], True
-                else:
-                    return None, False
+        return None, False
 
 
 class BitBucketApp(VcsApp):

@@ -1,7 +1,9 @@
 import json
 import logging
 import os
+import random
 import subprocess
+from functools import lru_cache
 from time import sleep
 from typing import List
 
@@ -21,27 +23,31 @@ logger = logging.getLogger("libinv.helpers")
 
 def send_to_slack(data: str):
     payload = {"text": str(data)}
-    requests.post(SLACK_URL, data=json.dumps(payload))
-    return
+    try:
+        requests.post(SLACK_URL, data=json.dumps(payload), timeout=10)
+    except requests.RequestException as exc:
+        logger.warning("Slack post failed: %s", exc)
 
 
-def retry_on_exception(exception: Exception, count=3, delay=5):
+def retry_on_exception(exception, count=3, delay=5):
     def decorator(func):
         def wrapper(*args, **kwargs):
-            raised_exc = RetryFailedException()
-            for times in range(count):
+            last_exc = None
+            for attempt in range(count):
                 try:
                     return func(*args, **kwargs)
                 except exception as exc:
-                    raised_exc = exc
-                    print(f"[{times}]: {func.__name__} raised {exc}", end="")
-                    if times < count - 1:
-                        print(f", retrying after {delay} seconds.")
-                        sleep(delay)
-                    else:
-                        print()
-            print("Enough retries. Function call is irrecoverable")
-            raise RetryFailedException from raised_exc
+                    last_exc = exc
+                    logger.warning(
+                        "%s raised %r on attempt %d/%d",
+                        func.__name__, exc, attempt + 1, count,
+                    )
+                    if attempt < count - 1:
+                        sleep_for = (delay * (2 ** attempt)) + random.uniform(0, delay)
+                        logger.warning("Retrying after %.2fs", sleep_for)
+                        sleep(sleep_for)
+            logger.error("%s: giving up after %d retries", func.__name__, count)
+            raise RetryFailedException(str(last_exc)) from last_exc
 
         return wrapper
 
@@ -143,10 +149,22 @@ def create_presigned_url_s3(object_name, bucket_name=S3_BUCKET_NAME, expiration=
     return response
 
 
+@lru_cache(maxsize=None)
+def _cached_boto3_client(service: str, endpoint_url: str = None):
+    """Process-wide cached boto3 client.
+
+    Credentials and region are resolved once at first call. Safe so long
+    as the container's IAM role / env-var credentials don't rotate
+    mid-process; if they do, restart the worker.
+    """
+    kwargs = {"region_name": AWS_REGION}
+    if endpoint_url:
+        kwargs["endpoint_url"] = endpoint_url
+    return boto3.client(service, **kwargs)
+
+
 def get_boto3_client(type, **kwargs):
-    client = boto3.client(type, region_name=AWS_REGION, **kwargs)
-    # NOTE: Sometimes you'll need endpoint_url=https://s3.ap-south-1.amazonaws.com
-    return client
+    return _cached_boto3_client(type, endpoint_url=kwargs.get("endpoint_url"))
 
 
 # thanks to HanSooloo https://stackoverflow.com/a/23726462/2251364
@@ -173,7 +191,7 @@ def delete_message_where_repository_url_contains(token: str, message_metadata: d
 
     # FIXME TMPFIX
     message_body = message_body.replace('"[', "[").replace(']"', "]")
-    logger.warn("Applied temp fix")
+    logger.warning("Applied temp fix")
 
     message = json.loads(message_body)
     message_type = message.get("type", "").casefold()
@@ -182,30 +200,35 @@ def delete_message_where_repository_url_contains(token: str, message_metadata: d
             repository_url = message["repository"]["url"]
             if token in repository_url:
                 delete_message(message_metadata["ReceiptHandle"])
-                logger.info("[*] Deleted message with url: {message['repository_url']}")
+                logger.info("[*] Deleted message with url: %s", message['repository']['url'])
     return
 
 
 def explode_git_url(url: str):
-    """
+    """Parse a Git URL into provider / org / name parts.
+
     >>> explode_git_url("git@github.com:gitorg/100ft-web.git")
     {'provider': 'github.com', 'org': 'gitorg', 'name': '100ft-web'}
     >>> explode_git_url("https://bitbucket.org/gitorg/libinv")
     {'provider': 'bitbucket.org', 'org': 'gitorg', 'name': 'libinv'}
+    >>> explode_git_url("git@github.com:org/repo")
+    {'provider': 'github.com', 'org': 'org', 'name': 'repo'}
+    >>> explode_git_url("ftp://example/foo/bar")
+    Traceback (most recent call last):
+        ...
+    ValueError: Unsupported git URL scheme: ftp://example/foo/bar
     """
     ssh_prefix = "git@"
-    if url.startswith(ssh_prefix):
-        provider, _, full_name = url[len(ssh_prefix) :].partition(
-            ":"
-        )  # [bug], full_name will not exist if above if statement is false
-
     https_prefix = "https://"
-    if url.startswith(https_prefix):
-        provider, _, full_name = url[len(https_prefix) :].partition("/")
+
+    if url.startswith(ssh_prefix):
+        provider, _, full_name = url[len(ssh_prefix):].partition(":")
+    elif url.startswith(https_prefix):
+        provider, _, full_name = url[len(https_prefix):].partition("/")
+    else:
+        raise ValueError(f"Unsupported git URL scheme: {url}")
 
     org, _, name = full_name.partition("/")
-    git_suffix = ".git"
-    if name.endswith(git_suffix):
-        name = name[: -len(git_suffix)]
-
+    if name.endswith(".git"):
+        name = name[: -len(".git")]
     return {"provider": provider, "org": org, "name": name}

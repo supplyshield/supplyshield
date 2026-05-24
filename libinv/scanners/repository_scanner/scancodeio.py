@@ -17,8 +17,10 @@ def run(
     wasp: Wasp,
     cdx_s3_object_name: str,
     scancode_url: str = SCANCODEIO_URL,
-    additional_pipelines: list = [],
+    additional_pipelines=None,
 ):
+    if additional_pipelines is None:
+        additional_pipelines = []
     logger.debug("Starting scancode io scan")
     cdx_url = create_presigned_url_s3(cdx_s3_object_name)
     input_urls = [cdx_url]
@@ -40,7 +42,12 @@ def run(
         "execute_now": EXECUTE_NOW,
     }
 
-    response = session.post(projects_api_url, data=project_data)
+    try:
+        response = session.post(projects_api_url, json=project_data, timeout=300)
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        logger.error("ScancodeIO project creation failed: %s", exc)
+        raise
     try:
         response_json = response.json()
     except json.decoder.JSONDecodeError as exc:

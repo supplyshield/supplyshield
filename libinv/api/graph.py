@@ -1,3 +1,5 @@
+import logging
+
 import networkx as nx
 from flask import Blueprint
 from flask import jsonify
@@ -9,6 +11,8 @@ from libinv.blast_radius.cdx import cdx_to_graph
 from libinv.blast_radius.cdx import fetch_cdx_from_s3
 from libinv.blast_radius.cdx import minify_package_url
 
+logger = logging.getLogger(__name__)
+
 blastradius = Blueprint("blastradius", __name__, template_folder="templates")
 
 
@@ -19,9 +23,9 @@ def get_graph(data, child_package):
     # Find all paths from parent_package to child_package
     all_paths = list(nx.all_simple_paths(graph, source=parent_package, target=child_package))
     if not all_paths:
-        print("No paths found from parent to child.")
+        logger.warning("No paths found from parent to child.")
     else:
-        print(f"Paths found: {all_paths}")
+        logger.info("Paths found: %s", all_paths)
 
     # Ensure to include the parent node in the subgraph nodes set
     subgraph_nodes = {parent_package}
@@ -50,7 +54,9 @@ def get_graph(data, child_package):
     if parent_package in subgraph_nodes:
         nt.get_node(parent_package).update(color="#14452f")
     else:
-        print(f"Parent node ({parent_package}) not in subgraph nodes: {subgraph_nodes}")
+        logger.warning(
+            "Parent node (%s) not in subgraph nodes: %s", parent_package, subgraph_nodes
+        )
 
     # nt.inherit_edge_colors(True)
     nt.get_node(child_package).update(color="#FF0000")

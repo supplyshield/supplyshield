@@ -1,13 +1,13 @@
 import json
 
-import boto3
 import networkx as nx
 
 from libinv.env import S3_BUCKET_NAME
+from libinv.helpers import get_boto3_client
 
 
 def fetch_cdx_from_s3(project_name):
-    s3 = boto3.client("s3")
+    s3 = get_boto3_client("s3")
     response = s3.get_object(Bucket=S3_BUCKET_NAME, Key=project_name)
     file_content = response["Body"].read().decode("utf-8")
     return json.loads(file_content)

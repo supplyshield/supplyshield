@@ -50,10 +50,11 @@ def new_actionable():
                     # Refresh to see if we have versions now
                     session.expire_all()
                     session.refresh(actionable)
-                except Exception as e:
-                    logger.error(f"Error fetching versions: {e}")
+                except Exception:
+                    logger.exception("Error fetching versions for %s", versionless_purl)
                     message = (
-                        f"Created/Found actionable but failed to fetch versions: {str(e)}"
+                        "Created/Found actionable but failed to fetch versions. "
+                        "Check server logs."
                     )
                     category = "warning"
                     return render_template(
@@ -76,6 +77,10 @@ def new_actionable():
                 )
             )
 
-    except Exception as e:
-        logger.error(f"Error in onboarding: {e}")
-        return render_template("onboard_package.html", message=f"An error occurred: {str(e)}", category="danger")
+    except Exception:
+        logger.exception("Error in onboarding package")
+        return render_template(
+            "onboard_package.html",
+            message="An error occurred. Check server logs.",
+            category="danger",
+        )

@@ -793,7 +793,16 @@ class Actionable(Base):
         logger.info(f"Processing: {self.package_url}")
         try:
             query = {"packages": [{"purl": self.package_url}]}
-            response = requests.post(f"{PURLDB_API_URL}/collect/index_packages/", json=query)
+            try:
+                response = requests.post(
+                    f"{PURLDB_API_URL}/collect/index_packages/",
+                    json=query,
+                    timeout=30,
+                )
+                response.raise_for_status()
+            except requests.RequestException as exc:
+                logger.error("PURLDB index_packages request failed: %s", exc)
+                raise
 
             if response.status_code == 200:
                 response_json = response.json()
@@ -1360,7 +1369,9 @@ class ActionablePackageAvailableVersion(Base):
             memory_file = BytesIO(json.dumps(scan_data).encode())
             files = {"upload_file": ("dependencies.json", memory_file)}
 
-            response = request_session.post(projects_api_url, data=project_data, files=files)
+            response = request_session.post(
+                projects_api_url, data=project_data, files=files, timeout=300
+            )
             print(projects_api_url)
             logger.debug(f"Scancodeio response: {response.text}")
 
@@ -1666,7 +1677,7 @@ class EPSS(Base):
                 cve_string = ",".join(batch)
                 try:
                     response = requests.get(
-                        f"https://api.first.org/data/v1/epss?cve={cve_string}", timeout=8
+                        f"https://api.first.org/data/v1/epss?cve={cve_string}", timeout=30
                     )
                     if response.status_code == 200:
                         api_data = response.json()

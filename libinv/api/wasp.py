@@ -17,7 +17,7 @@ def wasp_main():
 def get_wasp_by_id():
     wasp_id = request.args.get("id")
     if not wasp_id:
-        return jsonify({"error": "id parameter missing"}), 200
+        return jsonify({"error": "id parameter missing"}), 400
 
     uuid = wasp_id.split("/")[0]
     result = conn.query(Wasp).filter_by(uuid=uuid).first()
@@ -26,4 +26,4 @@ def get_wasp_by_id():
             jsonify({"repository_id": result.repository_id, "environment": result.environment}),
             200,
         )
-    return jsonify({"error": "Wasp not found"}), 500
+    return jsonify({"error": "Wasp not found"}), 404
