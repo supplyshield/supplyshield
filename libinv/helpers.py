@@ -10,6 +10,7 @@ from typing import List
 import boto3
 import requests
 from botocore.exceptions import ClientError
+from prometheus_client import Counter
 
 from libinv.env import AWS_REGION
 from libinv.env import S3_BUCKET_NAME
@@ -17,6 +18,20 @@ from libinv.env import SLACK_URL
 from libinv.exceptions import RetryFailedException
 from libinv.exceptions import SubprocessError
 from libinv.sqs import delete_message
+
+# Sprint 52.2 — surface ClientError failures from ``upload_to_s3``
+# both in logs (ERROR level with bucket + key + boto3 error code) and
+# as a Prometheus counter so alerts can fire when the S3 upload path
+# starts failing. The counter is published on the default registry
+# rather than the libinv-private one in ``libinv.api.metrics`` because
+# this module is also imported by the daemon / cron processes that
+# don't bring up the Flask app. The default registry is picked up by
+# ``prometheus_client.multiprocess`` collectors at scrape time.
+s3_upload_failures_total = Counter(
+    "libinv_s3_upload_failures_total",
+    "Total ClientError failures from libinv.helpers.upload_to_s3.",
+    labelnames=("bucket", "error_code"),
+)
 
 logger = logging.getLogger("libinv.helpers")
 
@@ -126,12 +141,23 @@ def case_insensitive_dict(dct: dict):
 
 
 def upload_to_s3(file_name, bucket=S3_BUCKET_NAME, object_name=None):
-    """Upload a file to an S3 bucket
+    """Upload a file to an S3 bucket.
+
+    Sprint 52.2 — on ``ClientError`` this function now logs at ERROR
+    level with the bucket + key + boto3 error code, increments the
+    Prometheus counter ``libinv_s3_upload_failures_total``, and
+    re-raises the original ``ClientError`` so callers cannot silently
+    miss a failed upload. The only caller (``libinv.main.process_sqs_message``)
+    relies on the outer ``Wasp.eat_caterpillar_message`` context manager
+    to surface the exception to the SQS daemon (Sprint 52.3 leaves the
+    message un-deleted so it lands in the DLQ after ``maxReceiveCount``
+    re-deliveries).
 
     :param file_name: File to upload
     :param bucket: Bucket to upload to
     :param object_name: S3 object name. If not specified then file_name is used
-    :return: object name if file was uploaded, else False
+    :return: object name on success
+    :raises botocore.exceptions.ClientError: on any S3 failure
     """
 
     logger.debug(f"Uploading to s3: {file_name}")
@@ -145,8 +171,22 @@ def upload_to_s3(file_name, bucket=S3_BUCKET_NAME, object_name=None):
     try:
         s3_client.upload_file(file_name, bucket, object_name)
     except ClientError as e:
-        logger.error(e)
-        return False
+        error_code = "Unknown"
+        try:
+            error_code = e.response.get("Error", {}).get("Code") or "Unknown"
+        except Exception:
+            # Some botocore exceptions don't carry a fully-populated
+            # ``response`` dict; degrade gracefully so we still emit
+            # the counter + structured log line.
+            pass
+        logger.error(
+            "S3 upload failed: bucket=%s key=%s error_code=%s file=%s",
+            bucket, object_name, error_code, file_name,
+        )
+        s3_upload_failures_total.labels(
+            bucket=str(bucket), error_code=str(error_code),
+        ).inc()
+        raise
 
     # TODO: Use this after s3 support in scio is implemented
     # s3_url = f"s3://{S3_BUCKET_NAME}/{object_name}"

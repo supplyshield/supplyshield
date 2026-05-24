@@ -73,6 +73,12 @@ EXCLUDED_REPOS = _parse_csv(os.getenv("EXCLUDED_REPOS"), default=[])
 
 LIBINV_API_TOKEN = os.getenv("LIBINV_API_TOKEN")
 
+# Sprint 51.2 — when set, /metrics requires an
+# ``Authorization: Bearer <token>`` header. When unset (default), the
+# endpoint stays unauthenticated (matching the Sprint 24 contract).
+# Comparison uses ``hmac.compare_digest`` to avoid timing side-channels.
+LIBINV_METRICS_TOKEN = os.getenv("LIBINV_METRICS_TOKEN")
+
 DB_HOSTNAME = os.getenv("DB_HOSTNAME")
 DB_NAME = os.getenv("DB_NAME", default="scancodeio")
 DB_USERNAME = os.getenv("DB_USERNAME")

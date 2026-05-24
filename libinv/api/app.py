@@ -4,6 +4,8 @@ from flask import redirect
 from flask import render_template
 from flask import request
 from flask import send_from_directory
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from sqlalchemy import text
 
 from libinv.api.actionable import actionable
@@ -23,6 +25,20 @@ from libinv.scanners.repository_scanner.sast.enums.ValidEnum import ValidEnum
 
 app = Flask(__name__, static_folder="static", template_folder="templates")
 
+# Sprint 51.1 — Flask-Limiter rate limiting.
+# Initialized BEFORE blueprints are registered so per-route decorators on
+# blueprint endpoints (e.g. /actionable/v3/*, /wasp/*) can resolve the
+# limiter via the app extension registry. Storage is in-memory; behind a
+# multi-worker gunicorn deployment each worker keeps its own counters
+# (best-effort throttling per-worker — fine for the audit baseline; swap
+# to a Redis storage_uri if a shared bucket is needed).
+limiter = Limiter(
+    app=app,
+    key_func=get_remote_address,
+    storage_uri="memory://",
+    default_limits=[],
+)
+
 app.register_blueprint(actionable, url_prefix="/actionable")
 app.register_blueprint(blastradius, url_prefix="/blastradius")
 app.register_blueprint(onboard_package, url_prefix="/onboard")
@@ -30,8 +46,41 @@ app.register_blueprint(wasp, url_prefix="/wasp")
 app.register_blueprint(compare_builds, url_prefix="/compare")
 app.register_blueprint(health)
 
+# Sprint 51.1 — exempt liveness / readiness from rate limiting so
+# Kubernetes probes never see 429. /metrics is NOT exempt; it is
+# limited to 6/minute (and authenticated separately per Sprint 51.2).
+limiter.exempt(health)
+
+
+def _apply_view_limit(endpoint_name: str, limit: str) -> None:
+    """Attach a `@limiter.limit(...)` decorator to an already-registered view.
+
+    Blueprint routes use a module-level decorator pattern that runs at
+    import time, before the app's Limiter exists. We resolve the view by
+    endpoint after the blueprints are registered and wrap it explicitly.
+    """
+    view = app.view_functions.get(endpoint_name)
+    if view is None:
+        return
+    app.view_functions[endpoint_name] = limiter.limit(limit)(view)
+
+
+# High-value /v3 routes — 60 requests/minute per remote IP.
+for _ep in (
+    "actionable.repositories_listing",
+    "actionable.package_details",
+    "actionable.safe_upgrades",
+    "actionable.request_package_scan",
+    "actionable.actionables_v3",
+    "actionable.statistics_dashboard",
+):
+    _apply_view_limit(_ep, "60/minute")
+
 register_global_auth(app)
 register_metrics(app)
+# Sprint 51.1 — /metrics is rate-limited (6/minute) but NOT exempt; it is
+# applied AFTER register_metrics so the endpoint exists in view_functions.
+_apply_view_limit("_metrics_route", "6/minute")
 install_json_formatter_if_configured()
 register_request_id(app)
 

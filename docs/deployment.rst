@@ -107,10 +107,84 @@ node-exporter-style scrape job, or define an explicit
        path: /metrics
        interval: 30s
 
+Sprint 51.1 added Flask-Limiter throttling: ``/metrics`` is capped at
+6 requests / minute / source IP, and the high-value ``/actionable/v3/*``
+routes at 60 / minute. ``/healthz`` and ``/readyz`` are explicitly
+exempted from rate limiting so liveness / readiness probes never see
+``429``. Keep the Prometheus ``interval`` above at 10s or wider for a
+single scraper; if you front the API with multiple scrapers, swap
+``storage_uri="memory://"`` for a Redis URI so the bucket is shared
+across gunicorn workers.
+
+Sprint 51.2 added an optional Bearer-token guard on ``/metrics``: when
+``LIBINV_METRICS_TOKEN`` is set in the env, the endpoint returns
+``401`` unless the request carries
+``Authorization: Bearer <LIBINV_METRICS_TOKEN>``. Leave the env var
+unset to keep the open Sprint 24 contract. Example scrape from
+``curl`` once the token is configured:
+
+.. code-block:: bash
+
+   curl -sf -H "Authorization: Bearer ${LIBINV_METRICS_TOKEN}" \
+        http://supplyshield-api/metrics
+
+For the Prometheus Operator add ``bearerTokenSecret`` to the
+``ServiceMonitor`` endpoint so scraping picks the token up from a
+Kubernetes ``Secret``:
+
+.. code-block:: yaml
+
+   endpoints:
+   - port: http
+     path: /metrics
+     interval: 30s
+     bearerTokenSecret:
+       name: supplyshield-secrets
+       key: metrics-token
+
 The exported counters / histograms include
 ``libinv_http_requests_total``, ``libinv_http_request_duration_seconds``
 (Sprint 24) and ``libinv_scan_invocations_total`` /
-``libinv_scan_failures_total`` (Sprints 25-26).
+``libinv_scan_failures_total`` (Sprints 25-26). Sprint 52.2 also adds
+``libinv_s3_upload_failures_total{bucket="...", error_code="..."}`` —
+incremented every time ``libinv.helpers.upload_to_s3`` catches a boto3
+``ClientError``. Sprint 52.3 adds
+``libinv_sqs_messages_failed_total{reason="..."}`` — incremented every
+time the daemon's ``process_message`` raises. Pair this counter with
+the queue's RedrivePolicy below; a spike in the counter correlates with
+messages landing in the configured dead-letter queue.
+
+***********************
+SQS dead-letter queue
+***********************
+
+Sprint 52.3 changed the daemon's message-handling path: when
+``process_message`` raises, the daemon now records the failure
+(``libinv_sqs_messages_failed_total{reason=<ExceptionClass>}``,
+structured log line) and lets the exception bubble — it does **not**
+delete the message. This lets the SQS visibility timeout expire so the
+queue re-delivers the message; once ``maxReceiveCount`` is exhausted,
+SQS forwards it to the configured dead-letter queue.
+
+For this to work, the main SQS queue **must** carry a ``RedrivePolicy``
+with ``deadLetterTargetArn`` set to a sibling DLQ. The recommended
+configuration is:
+
+.. code-block:: json
+
+   {
+     "RedrivePolicy": {
+       "deadLetterTargetArn": "arn:aws:sqs:<region>:<account>:supplyshield-dlq",
+       "maxReceiveCount": 5
+     }
+   }
+
+Tune ``maxReceiveCount`` based on how transient your typical
+``process_message`` failures are. ``5`` gives the daemon four retry
+opportunities (visibility-timeout window each) before a message is
+permanently parked on the DLQ for operator review. Without the
+RedrivePolicy, the queue will retain poison messages indefinitely and
+the new counter spike will be the only signal that something is wrong.
 
 **********
 Migrations
