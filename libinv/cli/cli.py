@@ -7,6 +7,7 @@ import click
 
 from libinv.logger import CustomFormatter
 from libinv.logger import color_handler
+from libinv.logger import seed_request_id_from_env
 
 
 @click.group()
@@ -15,6 +16,7 @@ from libinv.logger import color_handler
 @click.option("--color", is_flag=True, default=False)
 @click.pass_context
 def cli(ctx: click.Context, verbose: bool, debug: bool, color: bool) -> None:
+    seed_request_id_from_env()
     ctx.obj = {"slack_logging": True}
     if verbose:
         click.echo("Verbose mode is on")

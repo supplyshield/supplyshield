@@ -1,17 +1,41 @@
+import logging
+
 from flask import jsonify
 from flask import render_template
 from flask import request
 from packageurl import PackageURL
 
-from libinv import logger
 from libinv.base import Session
 from libinv.models import EPSS
 from libinv.models import ActionablePackageAvailableVersion
 from libinv.models import Repository
 from libinv.models import Repository_ActionablePackageAvailableVersion
 from libinv.scio_models import DiscoveredPackage
+from libinv.services.scancodeio_client import get_default_client
 
 from libinv.api.actionable import actionable
+
+logger = logging.getLogger(__name__)
+
+
+def _vulns_of(pkg):
+    """Return the ``affected_by_vulnerabilities`` collection for either an
+    ORM ``DiscoveredPackage`` (SQL path) or a DTO ``dict`` (HTTP path).
+
+    Both paths feed into the same downstream CVE-extraction loop; this
+    helper normalises attribute-vs-key access so the loop body is
+    storage-agnostic.
+    """
+    if isinstance(pkg, dict):
+        return pkg.get("affected_by_vulnerabilities", []) or []
+    return getattr(pkg, "affected_by_vulnerabilities", []) or []
+
+
+def _pkg_field(pkg, field):
+    """Return ``field`` from either an ORM instance or a DTO ``dict``."""
+    if isinstance(pkg, dict):
+        return pkg.get(field)
+    return getattr(pkg, field, None)
 
 
 @actionable.route("/v3/package-details", methods=["GET"])
@@ -68,19 +92,44 @@ def package_details():
 
         cve_details = []
         if actionable_package and actionable_package.scancode_project_uuid:
-            # Get all packages for this project from scanpipe_discoveredpackage
-            discovered_packages = (
-                session.query(DiscoveredPackage)
-                .filter(DiscoveredPackage.project_id == actionable_package.scancode_project_uuid)
-                .all()
-            )
+            # Gated HTTP migration: when LIBINV_SCIO_USE_HTTP is set and the
+            # ScancodeioClient is configured, fetch discovered packages via
+            # the HTTP API instead of reflecting the scio DB directly. On any
+            # HTTP failure we fall back to the SQL path so the route still
+            # functions when scancodeio is unreachable.
+            http_client = get_default_client()
+            discovered_packages = None
+            if http_client is not None:
+                try:
+                    discovered_packages = http_client.list_discovered_packages(
+                        actionable_package.scancode_project_uuid
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "SCIO HTTP list_discovered_packages failed for %s: %s; "
+                        "falling back to SQL",
+                        actionable_package.scancode_project_uuid,
+                        exc,
+                    )
+                    discovered_packages = None
+
+            if discovered_packages is None:
+                # SQL path (default; also used when HTTP fails).
+                discovered_packages = (
+                    session.query(DiscoveredPackage)
+                    .filter(
+                        DiscoveredPackage.project_id
+                        == actionable_package.scancode_project_uuid
+                    )
+                    .all()
+                )
 
             # Extract CVEs from vulnerability data
             cve_set = set()
             cve_sources = {}  # Track which discovered package each CVE came from
 
             for discovered_pkg in discovered_packages:
-                vulns = getattr(discovered_pkg, "affected_by_vulnerabilities", [])
+                vulns = _vulns_of(discovered_pkg)
                 if vulns:
                     for vuln in vulns:
                         try:
@@ -94,7 +143,9 @@ def package_details():
                                     cve_sources[cve_upper] = []
 
                                 # Create a unique key for this package
-                                package_key = f"{discovered_pkg.name or 'Unknown'}_{discovered_pkg.version or 'Unknown'}"
+                                pkg_name = _pkg_field(discovered_pkg, "name") or "Unknown"
+                                pkg_version = _pkg_field(discovered_pkg, "version") or "Unknown"
+                                package_key = f"{pkg_name}_{pkg_version}"
 
                                 # Check if this package is already in the sources for this CVE
                                 existing_packages = [
@@ -104,8 +155,8 @@ def package_details():
                                 if package_key not in existing_packages:
                                     cve_sources[cve_upper].append(
                                         {
-                                            "package_name": discovered_pkg.name or "Unknown",
-                                            "package_version": discovered_pkg.version or "Unknown",
+                                            "package_name": pkg_name,
+                                            "package_version": pkg_version,
                                             "vulnerability_data": vuln,
                                         }
                                     )

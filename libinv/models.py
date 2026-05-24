@@ -1197,7 +1197,24 @@ class ActionablePackageAvailableVersion(Base):
         self.vulns_count = vulns_count
 
     def _get_vulnerabilities_count(self):
-        if not self.scancode_project_uuid or DiscoveredPackage is None:
+        if not self.scancode_project_uuid:
+            return 0
+
+        from libinv.services.scancodeio_client import get_default_client
+
+        http_client = get_default_client()
+        if http_client is not None:
+            try:
+                return http_client.get_vulnerability_count(self.scancode_project_uuid)
+            except Exception as exc:
+                logger.warning(
+                    "SCIO HTTP get_vulnerability_count failed for %s: %s; "
+                    "falling back to SQL",
+                    self.scancode_project_uuid,
+                    exc,
+                )
+
+        if DiscoveredPackage is None:
             return 0
 
         with session_scope() as session:

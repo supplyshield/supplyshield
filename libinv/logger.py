@@ -76,3 +76,18 @@ def install_json_formatter_if_configured() -> bool:
     for handler in root.handlers:
         handler.setFormatter(fmt)
     return True
+
+
+def seed_request_id_from_env() -> str | None:
+    """Seed `request_id_var` from the `LIBINV_REQUEST_ID` env var if set.
+
+    Used by the CLI entry point so cron-scheduler-spawned subprocesses
+    inherit the parent job's correlation id.
+
+    Returns the id that was set, or None if the env var was absent.
+    """
+    rid = os.environ.get("LIBINV_REQUEST_ID")
+    if rid:
+        request_id_var.set(rid)
+        return rid
+    return None
