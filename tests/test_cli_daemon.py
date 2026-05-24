@@ -73,9 +73,11 @@ def test_daemon_processes_messages_and_continues_on_error():
         if calls["process"] == 2:
             raise RuntimeError("boom on msg-2")
 
-    with patch("libinv.cli.daemon.poll", side_effect=fake_poll), patch(
-        "libinv.cli.daemon.process_message", side_effect=fake_process
-    ), patch("libinv.cli.daemon._notify_slack") as slack_mock:
+    with patch("libinv.cli.daemon._wait_for_db"), patch(
+        "libinv.cli.daemon.poll", side_effect=fake_poll
+    ), patch("libinv.cli.daemon.process_message", side_effect=fake_process), patch(
+        "libinv.cli.daemon._notify_slack"
+    ) as slack_mock:
         runner = CliRunner()
         result = runner.invoke(cli_group, ["daemon", "--no-slack"])
 
@@ -105,9 +107,11 @@ def test_daemon_notifies_slack_when_enabled_and_process_fails():
     def fake_process(message):
         raise RuntimeError("boom")
 
-    with patch("libinv.cli.daemon.poll", side_effect=fake_poll), patch(
-        "libinv.cli.daemon.process_message", side_effect=fake_process
-    ), patch("libinv.cli.daemon._notify_slack") as slack_mock:
+    with patch("libinv.cli.daemon._wait_for_db"), patch(
+        "libinv.cli.daemon.poll", side_effect=fake_poll
+    ), patch("libinv.cli.daemon.process_message", side_effect=fake_process), patch(
+        "libinv.cli.daemon._notify_slack"
+    ) as slack_mock:
         runner = CliRunner()
         # Default is --slack (is_flag=True, default=True).
         result = runner.invoke(cli_group, ["daemon"])
@@ -121,9 +125,9 @@ def test_daemon_exits_when_shutdown_requested():
     d = _daemon_module()
     d._shutdown_requested = True
 
-    with patch("libinv.cli.daemon.poll") as poll_mock, patch(
-        "libinv.cli.daemon.process_message"
-    ) as process_mock:
+    with patch("libinv.cli.daemon._wait_for_db"), patch(
+        "libinv.cli.daemon.poll"
+    ) as poll_mock, patch("libinv.cli.daemon.process_message") as process_mock:
         runner = CliRunner()
         result = runner.invoke(cli_group, ["daemon", "--no-slack"])
 
@@ -147,9 +151,9 @@ def test_daemon_recovers_from_poll_failure():
             d._shutdown_requested = True
         return []
 
-    with patch("libinv.cli.daemon.poll", side_effect=fake_poll), patch(
-        "libinv.cli.daemon.process_message"
-    ) as process_mock:
+    with patch("libinv.cli.daemon._wait_for_db"), patch(
+        "libinv.cli.daemon.poll", side_effect=fake_poll
+    ), patch("libinv.cli.daemon.process_message") as process_mock:
         runner = CliRunner()
         result = runner.invoke(cli_group, ["daemon", "--no-slack"])
 
@@ -188,15 +192,141 @@ def test_daemon_breaks_out_of_message_loop_on_shutdown():
             # Simulate the signal handler firing in the middle of a batch.
             d._shutdown_requested = True
 
-    with patch("libinv.cli.daemon.poll", side_effect=fake_poll), patch(
-        "libinv.cli.daemon.process_message", side_effect=fake_process
-    ):
+    with patch("libinv.cli.daemon._wait_for_db"), patch(
+        "libinv.cli.daemon.poll", side_effect=fake_poll
+    ), patch("libinv.cli.daemon.process_message", side_effect=fake_process):
         runner = CliRunner()
         result = runner.invoke(cli_group, ["daemon", "--no-slack"])
 
     # Loop broke after the in-flight message; messages 3..5 were skipped.
     assert calls["process"] == 2
     assert result.exit_code == 0
+
+
+def test_wait_for_db_returns_on_first_success():
+    """Sprint 51.3 — happy path: a single ``SELECT 1`` and we return."""
+    d = _daemon_module()
+
+    fake_engine = type("E", (), {"url": type("U", (), {"host": "db.svc"})()})()
+    conn_cm = type(
+        "C",
+        (),
+        {
+            "__enter__": lambda self: self,
+            "__exit__": lambda self, *a: False,
+            "execute": lambda self, _s: None,
+        },
+    )()
+    fake_engine.connect = lambda: conn_cm
+
+    with patch("libinv.base.get_engine", return_value=fake_engine), patch(
+        "libinv.base.reset_engine_cache"
+    ) as reset_mock, patch("libinv.cli.daemon.time.sleep") as sleep_mock:
+        d._wait_for_db()
+
+    sleep_mock.assert_not_called()
+    reset_mock.assert_not_called()
+
+
+def test_wait_for_db_retries_until_success():
+    """Sprint 51.3 — first attempt fails, second succeeds; backoff invoked."""
+    from sqlalchemy.exc import OperationalError
+
+    d = _daemon_module()
+    attempts = {"n": 0}
+
+    class _FakeEngine:
+        url = type("U", (), {"host": "db.svc"})()
+
+        def connect(self):
+            attempts["n"] += 1
+            if attempts["n"] == 1:
+                raise OperationalError("SELECT 1", {}, Exception("conn refused"))
+
+            class _CM:
+                def __enter__(self_inner):
+                    return self_inner
+
+                def __exit__(self_inner, *a):
+                    return False
+
+                def execute(self_inner, _s):
+                    return None
+
+            return _CM()
+
+    fake = _FakeEngine()
+    with patch("libinv.base.get_engine", return_value=fake), patch(
+        "libinv.base.reset_engine_cache"
+    ) as reset_mock, patch("libinv.cli.daemon.time.sleep") as sleep_mock:
+        d._wait_for_db(initial_interval=0.01, max_interval=0.01, total_budget=60.0)
+
+    assert attempts["n"] == 2
+    sleep_mock.assert_called_once()
+    reset_mock.assert_called_once()
+
+
+def test_wait_for_db_raises_when_budget_exhausted():
+    """Sprint 51.3 — budget exhaustion surfaces a RuntimeError."""
+    from sqlalchemy.exc import OperationalError
+
+    d = _daemon_module()
+
+    class _FakeEngine:
+        url = type("U", (), {"host": "db.svc"})()
+
+        def connect(self):
+            raise OperationalError("SELECT 1", {}, Exception("down"))
+
+    # Force ``time.monotonic`` to jump past the budget after a single attempt.
+    times = iter([0.0, 9999.0, 9999.0, 9999.0])
+    with patch("libinv.base.get_engine", return_value=_FakeEngine()), patch(
+        "libinv.base.reset_engine_cache"
+    ), patch(
+        "libinv.cli.daemon.time.monotonic", side_effect=lambda: next(times)
+    ), patch("libinv.cli.daemon.time.sleep"):
+        with pytest.raises(RuntimeError, match="failed to reach Postgres"):
+            d._wait_for_db(initial_interval=0.01, max_interval=0.01, total_budget=1.0)
+
+
+def test_daemon_increments_sqs_failed_counter_on_process_exception():
+    """Sprint 52.3 — ``sqs_messages_failed_total`` is incremented on failure."""
+    from libinv.api.metrics import sqs_messages_failed_total
+
+    d = _daemon_module()
+    calls = {"process": 0}
+
+    def fake_poll():
+        # Return a one-message batch; the shutdown flag is flipped from
+        # inside fake_process AFTER it raises, so the failure path runs
+        # at least once and the daemon then exits cleanly.
+        return [{"Body": "msg-1"}]
+
+    def fake_process(_msg):
+        calls["process"] += 1
+        d._shutdown_requested = True
+        raise RuntimeError("boom")
+
+    # Snapshot the counter before the test so we can assert a delta of +1.
+    before = sqs_messages_failed_total.labels(reason="RuntimeError")._value.get()
+
+    with patch("libinv.cli.daemon._wait_for_db"), patch(
+        "libinv.cli.daemon.poll", side_effect=fake_poll
+    ), patch(
+        "libinv.cli.daemon.process_message", side_effect=fake_process
+    ), patch("libinv.cli.daemon._notify_slack"):
+        runner = CliRunner()
+        result = runner.invoke(cli_group, ["daemon", "--no-slack"])
+
+    after = sqs_messages_failed_total.labels(reason="RuntimeError")._value.get()
+    assert calls["process"] == 1, (
+        f"Expected fake_process to be invoked once; got {calls['process']}; "
+        f"exit_code={result.exit_code} output={result.output!r}"
+    )
+    assert after - before == 1, (
+        f"Expected sqs_messages_failed_total[reason=RuntimeError] to bump by 1; "
+        f"before={before} after={after} exit_code={result.exit_code}"
+    )
 
 
 def test_notify_slack_chunks_long_traceback():

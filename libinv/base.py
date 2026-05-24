@@ -20,14 +20,65 @@ from sqlalchemy.orm import sessionmaker
 from libinv.env import DB_STRING
 from libinv.env import LIBINV_STRICT_LAZY
 
-engine: Engine = db.create_engine(
-    DB_STRING,
-    pool_pre_ping=True,
-    pool_size=10,
-    max_overflow=20,
-    pool_recycle=1800,
-    pool_use_lifo=True,
-)
+
+# Sprint 51.3 — engine creation is lazy.
+#
+# ``db.create_engine`` itself only parses the DSN — it does NOT open a
+# TCP connection, so technically the import-time call is safe even when
+# Postgres is unreachable. The real failure surface is the *first* SQL
+# round-trip (``session.execute``, ``connect()``, etc.). Even so, we
+# wrap engine instantiation in a ``get_engine()`` helper + module-level
+# cache so:
+#   1. A future SQLAlchemy version that decides to probe the server on
+#      ``create_engine`` (some dialects already do via ``pool_pre_ping``
+#      pre-check hooks) cannot crash the daemon at import time.
+#   2. Callers that need to recreate the engine after a transient outage
+#      can call ``reset_engine_cache()`` followed by ``get_engine()``.
+#   3. The daemon startup-retry loop (``libinv/cli/daemon.py``) can
+#      explicitly drive ``SELECT 1`` against the engine and back off
+#      with exponential delays before the first ``session_scope()`` is
+#      ever opened.
+_engine: Engine | None = None
+
+
+def get_engine() -> Engine:
+    """Return the process-wide SQLAlchemy engine, creating it on first call.
+
+    Lazy + cached. Subsequent calls return the same engine instance unless
+    ``reset_engine_cache()`` has been invoked. Pool tuning matches Sprint
+    35.1 (pool_size=10, max_overflow=20, pool_recycle=1800,
+    pool_use_lifo=True, pool_pre_ping=True).
+    """
+    global _engine
+    if _engine is None:
+        _engine = db.create_engine(
+            DB_STRING,
+            pool_pre_ping=True,
+            pool_size=10,
+            max_overflow=20,
+            pool_recycle=1800,
+            pool_use_lifo=True,
+        )
+    return _engine
+
+
+def reset_engine_cache() -> None:
+    """Drop the cached engine + dispose its connection pool.
+
+    Tests + Sprint 51.3's daemon retry loop call this to force a fresh
+    ``create_engine`` invocation after a transient failure (e.g. so a
+    rotated DB password picks up cleanly).
+    """
+    global _engine
+    if _engine is not None:
+        try:
+            _engine.dispose()
+        except Exception:
+            pass
+        _engine = None
+
+
+engine: Engine = get_engine()
 Session: sessionmaker = sessionmaker(bind=engine)
 
 ScopedSession: scoped_session = scoped_session(Session)
