@@ -21,23 +21,15 @@ Skipped at collection when TEST_DATABASE_URL is unset (see
 tests/integration/conftest.py: collect_ignore_glob).
 """
 
-import pytest
+import pytest  # noqa: F401  (kept for the existing module-level imports below)
 
-# FIXME(Sprint 36): Pre-existing failures surfaced by pytest-postgresql
-# (Sprint 30 wired the ephemeral DB; previously these silently skipped when
-# TEST_DATABASE_URL was unset). The seed contract assumed by these tests
-# does not survive a fully-migrated empty DB. Resolution is owned by
-# Sprint 36 (statistics parallelism + decomposition: the helper will be
-# split into per-group helpers + ThreadPoolExecutor-fanned queries, at
-# which point the test seeding can be re-aligned).
-pytestmark = pytest.mark.xfail(
-    reason=(
-        "Pre-existing failures surfaced by pytest-postgresql; "
-        "tracked under Sprint 36 (statistics parallelism + decomposition). "
-        "These tests were silently skipping prior to Sprint 30."
-    ),
-    strict=False,
-)
+# Sprint 36 resolution: the 14 xfail markers added in Sprint 30 (when
+# pytest-postgresql first gave these tests a real DB) are removed now that
+# Sprint 36.1 decomposed ``_compute_statistics`` and Sprint 36.2 fixed the
+# underlying SQL bug — the repo-bucket aggregate was missing an explicit
+# ``select_from(Repository)`` so Postgres rejected it with
+# ``missing FROM-clause entry for table 'repositories'``. The per-group
+# helpers also add ``select_from(Repository)`` to the pod stats aggregate.
 
 
 # Top-level keys the helper must always return — every one is referenced by

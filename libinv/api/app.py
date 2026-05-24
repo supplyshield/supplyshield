@@ -4,6 +4,7 @@ from flask import redirect
 from flask import render_template
 from flask import request
 from flask import send_from_directory
+from sqlalchemy import text
 
 from libinv.api.actionable import actionable
 from libinv.api.auth import register_global_auth
@@ -33,6 +34,22 @@ register_global_auth(app)
 register_metrics(app)
 install_json_formatter_if_configured()
 register_request_id(app)
+
+
+@app.before_request
+def _set_statement_timeout():
+    # Sprint 35.2 — apply a 30s statement_timeout to every request's session
+    # so a single slow query cannot pin a worker thread indefinitely. Using
+    # SET LOCAL scopes the timeout to the current transaction; on Postgres a
+    # bare query auto-opens a transaction, so this binds to the work that
+    # follows in the same request. The previous per-route SET inside
+    # `statistics_dashboard` is now redundant and was removed.
+    try:
+        ScopedSession().execute(text("SET LOCAL statement_timeout = '30s'"))
+    except Exception:
+        # Never let timeout setup fail a request; if the database is
+        # unreachable the downstream query will surface that error.
+        ScopedSession.remove()
 
 
 @app.teardown_request

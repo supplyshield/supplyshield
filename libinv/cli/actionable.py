@@ -55,7 +55,8 @@ def scan_versions_in_use() -> None:
             ScopedSession.remove()
 
     # Use ThreadPoolExecutor for concurrent scanning
-    with ThreadPoolExecutor() as executor:
+    # Cap at 4 to avoid SQLAlchemy pool starvation (post-Sprint-35 pool_size=10).
+    with ThreadPoolExecutor(max_workers=4) as executor:
         executor.map(scan_package, packages_in_use)
 
 
@@ -188,7 +189,8 @@ def populate_next_safe_versions() -> None:
             # Worker-thread session isolation (Sprint 0).
             ScopedSession.remove()
 
-    with ThreadPoolExecutor() as executor:
+    # Cap at 4 to avoid SQLAlchemy pool starvation (post-Sprint-35 pool_size=10).
+    with ThreadPoolExecutor(max_workers=4) as executor:
         executor.map(process_package, actionable_packages)
 
 

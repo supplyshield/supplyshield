@@ -17,7 +17,14 @@ from sqlalchemy.orm import sessionmaker
 
 from libinv.env import DB_STRING
 
-engine: Engine = db.create_engine(DB_STRING, pool_pre_ping=True)
+engine: Engine = db.create_engine(
+    DB_STRING,
+    pool_pre_ping=True,
+    pool_size=10,
+    max_overflow=20,
+    pool_recycle=1800,
+    pool_use_lifo=True,
+)
 Session: sessionmaker = sessionmaker(bind=engine)
 
 ScopedSession: scoped_session = scoped_session(Session)

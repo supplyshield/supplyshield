@@ -60,7 +60,14 @@ The following table summarises the top-level packages under
 +-----------------------------------+---------------------------------------------------+
 | ``libinv/base.py``                | Engine, ``sessionmaker``, ``ScopedSession``,      |
 |                                   | the ``session_scope()`` context manager, and the  |
-|                                   | deprecated ``conn`` proxy (Sprint 13).            |
+|                                   | deprecated ``conn`` proxy (Sprint 13). The engine |
+|                                   | is created with a tuned pool (Sprint 35.1):       |
+|                                   | ``pool_size=10``, ``max_overflow=20``,            |
+|                                   | ``pool_recycle=1800``, ``pool_use_lifo=True``,    |
+|                                   | ``pool_pre_ping=True``. A global Flask            |
+|                                   | ``before_request`` hook in ``libinv/api/app.py``  |
+|                                   | sets ``statement_timeout = '30s'`` on every       |
+|                                   | request (Sprint 35.2).                            |
 +-----------------------------------+---------------------------------------------------+
 | ``libinv/cli/``                   | Click-based CLI entry points: ``actionable``,    |
 |                                   | ``daemon``, ``bridge``, ``epss``, ``checkpoint``, |
