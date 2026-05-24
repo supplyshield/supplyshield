@@ -41,7 +41,7 @@ jobs:
     - name: Run mypy
       run: |
         python -m mypy --config-file pyproject.toml
-      continue-on-error: true
+      continue-on-error: false
 
     - name: Run bandit
       run: |

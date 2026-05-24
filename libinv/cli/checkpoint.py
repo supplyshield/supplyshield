@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from datetime import datetime
 from datetime import timezone
 
@@ -12,7 +14,7 @@ from libinv.models import DeploymentCheckpoint
 @click.option("--get", "-g", "get", is_flag=True)
 @click.option("--set", "-s", "checkpoint_time", help="One of the values from --list or NOW")
 @click.option("--list", "-l", "list_", is_flag=True)
-def checkpoint(get, checkpoint_time, list_):
+def checkpoint(get: bool, checkpoint_time: str | None, list_: bool) -> None:
     """
     Get or set checkpoints for latest images table
     Updates latest images table on setting a new checkpoint

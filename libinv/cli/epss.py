@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import logging
 
 import click
@@ -24,7 +26,13 @@ logger = logging.getLogger(__name__)
     is_flag=True,
     help="Update EPSS for all unique CVEs from actionable packages",
 )
-def epss_update(cve: str, cves: str, file: str, verbose: bool, all_actionable_cves: bool):
+def epss_update(
+    cve: str | None,
+    cves: str | None,
+    file: str | None,
+    verbose: bool,
+    all_actionable_cves: bool,
+) -> None:
     """
     Update or insert EPSS scores for CVEs, only fetching from API if not present or stale (>30 days).
     """
@@ -146,7 +154,7 @@ def epss_update(cve: str, cves: str, file: str, verbose: bool, all_actionable_cv
 @click.option(
     "--batch-size", default=100, help="Number of packages to process in each batch (default: 100)"
 )
-def calculate_package_epss(verbose: bool, batch_size: int):
+def calculate_package_epss(verbose: bool, batch_size: int) -> None:
     """
     Calculate and populate maximum EPSS scores for actionable packages.
 

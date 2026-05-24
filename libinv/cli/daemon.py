@@ -1,7 +1,10 @@
+from __future__ import annotations
+
 import json
 import logging
 import signal
 import traceback
+from typing import Any
 
 import click
 
@@ -15,7 +18,7 @@ logger = logging.getLogger(__name__)
 _shutdown_requested = False
 
 
-def _request_shutdown(signum, frame):
+def _request_shutdown(signum: int, frame: Any) -> None:
     global _shutdown_requested
     _shutdown_requested = True
     logger.warning("Shutdown signal %s received; will exit after current batch.", signum)
@@ -24,7 +27,7 @@ def _request_shutdown(signum, frame):
 @cli.command()
 @click.option("--slack/--no-slack", is_flag=True, default=True)
 @click.pass_context
-def daemon(ctx, slack):
+def daemon(ctx: click.Context, slack: bool) -> None:
     """Poll messages from sqs queue and populate libinv database."""
     click.echo("starting service")
     if not ctx.obj["slack_logging"]:
@@ -57,7 +60,7 @@ def daemon(ctx, slack):
     click.echo("daemon exited cleanly")
 
 
-def _notify_slack(message):
+def _notify_slack(message: Any) -> None:
     try:
         body = json.dumps(message)
     except Exception:

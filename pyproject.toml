@@ -52,6 +52,7 @@ files = [
     "libinv/services",
     "libinv/api",
     "libinv/scanners",
+    "libinv/cli",
 ]
 follow_imports = "silent"
 ignore_missing_imports = true
@@ -84,7 +85,7 @@ disable_error_code = ["return-value", "assignment", "var-annotated", "attr-defin
 # Column typing leaks, untyped yield/return slots, dynamic attrs, etc).
 # Sprint 19+ should peel categories off this list as files are annotated.
 [[tool.mypy.overrides]]
-module = ["libinv.api.*", "libinv.scanners.*"]
+module = ["libinv.api.*", "libinv.scanners.*", "libinv.cli.*"]
 disallow_untyped_defs = false
 disable_error_code = [
     "return-value",

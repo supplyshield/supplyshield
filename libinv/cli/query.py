@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import click
 
 from libinv import Session
@@ -7,7 +9,7 @@ from libinv.models import get_base_image_of
 
 
 @cli.group()
-def query():
+def query() -> None:
     """
     Various query subcommands for libinv database
     """
@@ -18,7 +20,7 @@ def query():
 @click.option("--tech-only", is_flag=True)
 @click.option("--sre-only", is_flag=True)
 @click.argument("image_id", type=click.INT)
-def sbom(tech_only, sre_only, image_id):
+def sbom(tech_only: bool, sre_only: bool, image_id: int) -> None:
     session = Session()
     image = Image.get_by_id(session, image_id)
     base = get_base_image_of(image)

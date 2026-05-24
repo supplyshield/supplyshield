@@ -80,7 +80,6 @@ packageurl-python==0.15.0
 packaging==23.2
 parso==0.8.4
 pathspec==0.12.1
-peewee==3.17.1
 pexpect==4.9.0
 pillow==10.2.0
 platformdirs==4.2.0

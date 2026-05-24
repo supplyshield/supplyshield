@@ -1,4 +1,7 @@
+from __future__ import annotations
+
 import logging
+from typing import Any
 
 import requests
 from sqlalchemy.exc import MultipleResultsFound
@@ -17,7 +20,7 @@ logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 
-def metapod_services():
+def metapod_services() -> list[dict[str, Any]]:
     try:
         resp = requests.get(SERVICE_METADATA_URL, timeout=15)
         resp.raise_for_status()
@@ -27,7 +30,7 @@ def metapod_services():
         return []
 
 
-def process_metapod_service(metapod_service):
+def process_metapod_service(metapod_service: dict[str, Any]) -> dict[str, Any]:
     repo_url = metapod_service.get("repository_url")
     if not repo_url:
         return {
@@ -50,7 +53,7 @@ def process_metapod_service(metapod_service):
 
 
 @cli.command()
-def import_and_improve_from_metapod():
+def import_and_improve_from_metapod() -> None:
     services = metapod_services()
     processed_services = []
 

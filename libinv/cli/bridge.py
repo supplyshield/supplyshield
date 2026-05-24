@@ -1,7 +1,10 @@
+from __future__ import annotations
+
 import itertools
 import logging
 from collections import defaultdict
 from pathlib import Path
+from typing import Any
 
 import click
 from git import InvalidGitRepositoryError
@@ -20,7 +23,7 @@ logger = logging.getLogger("bridge")
 
 @cli.command()
 @click.argument("repositories_dir", type=click.Path(exists=True))
-def connect(repositories_dir):
+def connect(repositories_dir: str) -> None:
     """
     Retrive tags from each Image in the database for which repository is not present and populate it
     by looking at corresponding tag in repositories_dir
@@ -54,7 +57,7 @@ def connect(repositories_dir):
                 click.echo(f"{commit}\t{repo.remotes.origin.url}")
 
 
-def connect_image_with_commit_map(image, commit_map):
+def connect_image_with_commit_map(image: Any, commit_map: dict[str, list[Any]]) -> list[Any]:
     collisions = []
     conn = Session()
     logger.info(f"Processing {image.name} with tag {image.tag}")
@@ -88,7 +91,9 @@ def connect_image_with_commit_map(image, commit_map):
     return collisions
 
 
-def build_commit_map_for_one_repository(repository_dir, commit_id_len=10):
+def build_commit_map_for_one_repository(
+    repository_dir: Path, commit_id_len: int = 10
+) -> dict[str, list[Any]]:
     commit_map = {}
     if not repository_dir.is_dir():
         return {}
