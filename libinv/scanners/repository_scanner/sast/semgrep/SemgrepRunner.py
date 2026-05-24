@@ -1,6 +1,6 @@
 import logging
-
-from libinv.scanners.repository_scanner.sast.semgrep import utils
+import shlex
+import subprocess
 
 logger = logging.getLogger("libinv.helpers")
 
@@ -23,11 +23,29 @@ class SemgrepRunner:
         executes the semgrep command and saves the result in output folder
         """
 
-        rules_m = "--config=".join(map(lambda x: f"'{x}' ", self.rules))
-        cmd = f"semgrep --no-git-ignore --config={rules_m} --sarif  --timeout 0 --output '{self.output_file}' '{self.config.base_code_directory}'"
-        logger.info("[INFO] EXEC Running:: " + cmd)
+        # Build argv list to avoid shell injection from untrusted config values
+        # (e.g. repository name, base code directory).
+        argv = ["semgrep", "--no-git-ignore"]
+        for r in self.rules:
+            argv.extend(["--config", r])
+        argv.extend([
+            "--sarif",
+            "--timeout", "300",
+            "--output", self.output_file,
+            str(self.config.base_code_directory),
+        ])
 
-        utils.exec(cmd)
+        logger.info("[INFO] EXEC Running:: " + shlex.join(argv))
+
+        result = subprocess.run(
+            argv,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=3600,
+        )
+        if result.stderr:
+            logger.info("[INFO] semgrep stderr:: " + result.stderr)
 
         return self.output_file
 

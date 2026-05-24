@@ -1,7 +1,9 @@
 # pylint: disable=no-member
 import base64
+import json
 import os
 from pathlib import Path
+from urllib.parse import urlparse
 
 import docker
 from attrs import define
@@ -57,7 +59,7 @@ class EcrClient:
         token = base64.b64decode(token).decode()
         username, password = token.split(":")
         registry = self.authorization_token["authorizationData"][0]["proxyEndpoint"]
-        registry = registry.lstrip("https://")
+        registry = registry.removeprefix("https://")
         auth_config = {"username": username, "password": password, "registry": registry}
         return auth_config
 
@@ -77,21 +79,20 @@ class EcrClient:
         creds = self.get_ecr_creds()
         username = creds["username"]
         password = creds["password"]
-        registry = creds["registry"].split("://")[1]
+        registry = urlparse(creds["registry"]).netloc or creds["registry"]
         HOME_PATH = str(Path.home())
-        if os.path.exists(HOME_PATH + "/.docker/config.json") is False:
-            os.mkdir(HOME_PATH + "/.docker")
-            open(HOME_PATH + "/.docker/config.json", "w+")
+        docker_dir = os.path.join(HOME_PATH, ".docker")
+        config_path = os.path.join(docker_dir, "config.json")
+        os.makedirs(docker_dir, exist_ok=True)
 
-        f = open(HOME_PATH + "/.docker/config.json", "w")
-        auth_json = (
-            '{"auths":{"'
-            + registry
-            + '":{"username":"'
-            + username
-            + '","password":"'
-            + password
-            + '"}}}'
+        auth_json = json.dumps(
+            {"auths": {registry: {"username": username, "password": password}}}
         )
-        f.write(auth_json)
+        fd = os.open(config_path, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(auth_json)
+        except Exception:
+            os.close(fd) if "fd" in locals() else None
+            raise
         return

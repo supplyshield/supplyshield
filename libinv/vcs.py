@@ -39,13 +39,21 @@ class VcsApp(ABC):
         return (self.token_expiry - current_time) < (30 * 60)
 
     def write_token_to_netrc(self, token):
-        """
-        Writes the token to the .netrc file.
-        """
-        with open(self.NETRC_FILE, "w") as netrc_file:
-            netrc_file.write(f"machine {self.machine}\n")
-            netrc_file.write(f"login {self.login}\n")
-            netrc_file.write(f"password {token}\n")
+        """Atomically write a 0600-mode .netrc with the current token."""
+        content = (
+            f"machine {self.machine}\n"
+            f"login {self.login}\n"
+            f"password {token}\n"
+        )
+        # Open with explicit mode 0o600 and O_TRUNC, never letting an
+        # interim 0644 file exist on disk.
+        fd = os.open(self.NETRC_FILE, os.O_CREAT | os.O_WRONLY | os.O_TRUNC, 0o600)
+        try:
+            with os.fdopen(fd, "w") as f:
+                f.write(content)
+        except Exception:
+            os.close(fd) if "fd" in locals() else None
+            raise
 
     def authenticate(self):
         """
@@ -90,7 +98,8 @@ class GitHubApp(VcsApp):
         self.app_id = GITHUB_APP_APP_ID
         self.installation_id = GITHUB_APP_INSTALLATION_ID
         logger.debug(f"[*] Trying to open {GITHUB_APP_PRIVATE_KEY_FILE}")
-        self.private_key = open(GITHUB_APP_PRIVATE_KEY_FILE).read()
+        with open(GITHUB_APP_PRIVATE_KEY_FILE, "r") as f:
+            self.private_key = f.read()
         self.token_endpoint = f"/app/installations/{self.installation_id}/access_tokens"
 
     def get_token(self):

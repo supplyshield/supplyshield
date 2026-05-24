@@ -20,7 +20,9 @@ def getfilenamewithoutext(filepath):
 
 
 def getdatetime():
-    return datetime.today().strftime("%Y-%m-%d %H:%M:%S")
+    # Fix: `datetime` here is the module (see `import datetime` above), so
+    # `datetime.today()` raised AttributeError. Use `datetime.datetime.now()`.
+    return datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def fingerprint_semgrep_single_result_sarif(semgrep, subpath):
@@ -98,10 +100,6 @@ def create_folder(folder):
 
     os.mkdir(folder)
     return True
-
-
-def exec(cmd):  # this can be wrapped around a class
-    os.system(cmd)
 
 
 def replace_with_uuid(path):

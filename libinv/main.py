@@ -25,6 +25,15 @@ def process_sqs_message(message_metadata: dict):
     logger.debug(f"Received message: \n {message_metadata}")
     message_body = message_metadata["Body"]
 
+    receipt_handle = message_metadata.get("ReceiptHandle")
+    if receipt_handle:
+        try:
+            from libinv.sqs import change_message_visibility
+            change_message_visibility(receipt_handle, 1800)
+            logger.debug("Extended SQS visibility to 1800s")
+        except Exception as exc:
+            logger.warning("Failed to extend SQS visibility: %s", exc)
+
     message = json.loads(message_body)
 
     message_type = message.get("type", "").casefold()

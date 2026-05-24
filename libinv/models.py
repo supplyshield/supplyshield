@@ -860,16 +860,16 @@ class Actionable(Base):
             .all()
         )
 
-    def get_safe_versions(self):
-        with Session() as session:
-            result = list(
-                session.query(ActionablePackageAvailableVersion)
-                .filter(ActionablePackageAvailableVersion.actionable_id == self.uuid)
-                .filter(ActionablePackageAvailableVersion.vulns_count == 0)
-                .filter(ActionablePackageAvailableVersion.scan_status == "SUCCESS")
-                .all()
-            )
-            return sorted(result, key=lambda v: MavenVersion(v.version))
+    def get_safe_versions(self, session=None):
+        s = session or conn
+        result = list(
+            s.query(ActionablePackageAvailableVersion)
+            .filter(ActionablePackageAvailableVersion.actionable_id == self.uuid)
+            .filter(ActionablePackageAvailableVersion.vulns_count == 0)
+            .filter(ActionablePackageAvailableVersion.scan_status == "SUCCESS")
+            .all()
+        )
+        return sorted(result, key=lambda v: MavenVersion(v.version))
 
     def get_versions_between(self, start_version, end_version):
         versions = self.get_available_versions()
@@ -917,14 +917,14 @@ class Actionable(Base):
 
         conn.commit()
 
-    def get_latest(self):
-        with Session() as session:
-            return (
-                session.query(ActionablePackageAvailableVersion)
-                .filter(ActionablePackageAvailableVersion.actionable_id == self.uuid)
-                .filter(ActionablePackageAvailableVersion.is_latest == True)
-                .one_or_none()
-            )
+    def get_latest(self, session=None):
+        s = session or conn
+        return (
+            s.query(ActionablePackageAvailableVersion)
+            .filter(ActionablePackageAvailableVersion.actionable_id == self.uuid)
+            .filter(ActionablePackageAvailableVersion.is_latest == True)
+            .one_or_none()
+        )
 
     @classmethod
     def get_safe_version_for(cls, session, package_url):

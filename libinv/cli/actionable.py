@@ -3,6 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import click
 
+from libinv.base import ScopedSession
 from libinv.base import Session
 from libinv.base import conn
 from libinv.cli.cli import cli
@@ -33,10 +34,15 @@ def scan_versions_in_use():
     logger.info(f"Scanning {len(packages_in_use)} packages..")
 
     def scan_package(package):
-        if package.vulns_count and package.vulns_count > 0:
-            logger.info(f"Skipping {package.package_url} as it already has known vulnerabilities.")
-            return
-        package.scan_and_update_results()
+        try:
+            if package.vulns_count and package.vulns_count > 0:
+                logger.info(
+                    f"Skipping {package.package_url} as it already has known vulnerabilities."
+                )
+                return
+            package.scan_and_update_results()
+        finally:
+            ScopedSession.remove()
 
     # Use ThreadPoolExecutor for concurrent scanning
     with ThreadPoolExecutor() as executor:
@@ -121,32 +127,37 @@ def populate_next_safe_versions():
     logger.info(f"Populating next safe version for {len(actionable_packages)} packages..")
 
     def process_package(package):
-        logger.info(f"Finding safe version for {package.package_url}..")
-        versions_used = package.get_versions_in_use(conn)
+        try:
+            logger.info(f"Finding safe version for {package.package_url}..")
+            versions_used = package.get_versions_in_use(conn)
 
-        logger.info(f"Found {len(versions_used)} versions in use..")
+            logger.info(f"Found {len(versions_used)} versions in use..")
 
-        for version in versions_used:
-            if version.is_safe:
-                logger.info("Version is already safe. Skipping..")
-                continue
+            for version in versions_used:
+                if version.is_safe:
+                    logger.info("Version is already safe. Skipping..")
+                    continue
 
-            current_safe_upgrade = version.get_safe_upgrade()
-            if current_safe_upgrade is None:
-                logger.error(
-                    f"No safe upgrade found for {version.version} of {package.package_url}"
+                current_safe_upgrade = version.get_safe_upgrade()
+                if current_safe_upgrade is None:
+                    logger.error(
+                        f"No safe upgrade found for {version.version} of {package.package_url}"
+                    )
+                    continue
+
+                potential_safe_upgrades = package.get_versions_between(
+                    version, current_safe_upgrade
                 )
-                continue
 
-            potential_safe_upgrades = package.get_versions_between(version, current_safe_upgrade)
+                if len(potential_safe_upgrades) < 2:
+                    logger.info(
+                        f"No other safe upgrades found for {version.version} of {package.package_url}"
+                    )
+                    continue
 
-            if len(potential_safe_upgrades) < 2:
-                logger.info(
-                    f"No other safe upgrades found for {version.version} of {package.package_url}"
-                )
-                continue
-
-            package.find_safe_version_in(potential_safe_upgrades)
+                package.find_safe_version_in(potential_safe_upgrades)
+        finally:
+            ScopedSession.remove()
 
     with ThreadPoolExecutor() as executor:
         executor.map(process_package, actionable_packages)

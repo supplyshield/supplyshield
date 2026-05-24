@@ -40,6 +40,8 @@ JIRA_TOKEN = os.getenv("JIRA_TOKEN")
 
 EXCLUDED_REPOS = os.getenv("EXCLUDED_REPOS", default=[])
 
+LIBINV_API_TOKEN = os.getenv("LIBINV_API_TOKEN")
+
 DB_HOSTNAME = os.getenv("DB_HOSTNAME")
 DB_NAME = os.getenv("DB_NAME", default="scancodeio")
 DB_USERNAME = os.getenv("DB_USERNAME")

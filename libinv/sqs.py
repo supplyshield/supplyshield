@@ -32,6 +32,15 @@ def delete_message(receipt_handle):
     return response
 
 
+def change_message_visibility(receipt_handle: str, visibility_timeout_seconds: int = 1800):
+    sqs_client = boto3.client("sqs", region_name=AWS_REGION)
+    return sqs_client.change_message_visibility(
+        QueueUrl=get_queue_url(),
+        ReceiptHandle=receipt_handle,
+        VisibilityTimeout=visibility_timeout_seconds,
+    )
+
+
 def poll():
     messages = []
     while not messages:

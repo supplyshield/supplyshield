@@ -6,10 +6,12 @@ from flask import request
 from flask import send_from_directory
 
 from libinv.api.actionable import actionable
+from libinv.api.auth import register_global_auth
 from libinv.api.compare_builds import compare_builds
 from libinv.api.graph import blastradius
 from libinv.api.onboard_package import onboard_package
 from libinv.api.wasp import wasp
+from libinv.base import ScopedSession
 from libinv.base import conn
 from libinv.env import API_DOCS_FOLDER
 from libinv.models import SastResult
@@ -22,6 +24,17 @@ app.register_blueprint(blastradius, url_prefix="/blastradius")
 app.register_blueprint(onboard_package, url_prefix="/onboard")
 app.register_blueprint(wasp, url_prefix="/wasp")
 app.register_blueprint(compare_builds, url_prefix="/compare")
+
+register_global_auth(app)
+
+
+@app.teardown_request
+def _remove_thread_local_session(exc):
+    # Dispose the current thread's session at end of every request so the
+    # next request on the same thread starts with a fresh identity map and
+    # transactional state. Without this, the long-lived module-level `conn`
+    # accumulates state across requests under gunicorn threads.
+    ScopedSession.remove()
 
 
 @app.route("/")
@@ -58,21 +71,21 @@ def update_sast_result():
     if "sec_id" in data:
         sec_id = data["sec_id"]
     else:
-        return jsonify({"error", "sec_id key missing"}), 200
+        return jsonify({"error": "sec_id key missing"}), 400
 
     result = conn.query(SastResult).filter_by(id=sec_id).first()
     if not result:
-        return jsonify({"error": "SEC ID not found"}), 200
+        return jsonify({"error": "SEC ID not found"}), 404
 
     if "data" in data:
         update_data = data["data"]
     else:
-        return jsonify({"error": "data key missing"}), 200
+        return jsonify({"error": "data key missing"}), 400
 
     if "validated" in data:
         result.validated = status_messages[data["validated"]].value
     else:
-        return jsonify({"error": "validated key missing / incorrect"}), 200
+        return jsonify({"error": "validated key missing / incorrect"}), 400
 
     if data["validated"] == "FALSEPOSITIVE":
         result.description = update_data
