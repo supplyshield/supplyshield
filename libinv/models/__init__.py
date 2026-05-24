@@ -50,22 +50,25 @@ from libinv.models._legacy import Actionable  # noqa: F401
 from libinv.models._legacy import ActionablePackageAvailableVersion  # noqa: F401
 from libinv.models._legacy import ConflictingInfoError  # noqa: F401
 from libinv.models._legacy import DeploymentCheckpoint  # noqa: F401
-from libinv.models._legacy import EPSS  # noqa: F401
+# Sprint 40.3: EPSS-domain class lives in libinv/models/epss.py.
+from libinv.models.epss import EPSS  # noqa: F401
 # Sprint 39.2: Image-domain classes live in libinv/models/image.py.
 from libinv.models.image import Image  # noqa: F401
 from libinv.models.image import ImagePackageAssociation  # noqa: F401
 from libinv.models.image import LatestImage  # noqa: F401
 from libinv.models.image import Layer  # noqa: F401
-from libinv.models._legacy import License  # noqa: F401
+# Sprint 40.1: Package-domain classes live in libinv/models/package.py.
+from libinv.models.package import License  # noqa: F401
 from libinv.models._legacy import MalformedCaterpillarMessage  # noqa: F401
-from libinv.models._legacy import Package  # noqa: F401
-from libinv.models._legacy import PackageLicenseAssociation  # noqa: F401
+from libinv.models.package import Package  # noqa: F401
+from libinv.models.package import PackageLicenseAssociation  # noqa: F401
 from libinv.models._legacy import Repository_ActionablePackageAvailableVersion  # noqa: F401
 from libinv.models._legacy import SastLobMetaData  # noqa: F401
 from libinv.models._legacy import SastResult  # noqa: F401
 from libinv.models._legacy import Secbug  # noqa: F401
-from libinv.models._legacy import Vulnerability  # noqa: F401
-from libinv.models._legacy import VulnerabilityPackageAssociation  # noqa: F401
+# Sprint 40.2: Vulnerability-domain classes live in libinv/models/vulnerability.py.
+from libinv.models.vulnerability import Vulnerability  # noqa: F401
+from libinv.models.vulnerability import VulnerabilityPackageAssociation  # noqa: F401
 from libinv.models._legacy import Wasp  # noqa: F401
 from libinv.models._legacy import filter_model_collection  # noqa: F401
 from libinv.models._legacy import get_base_image_of  # noqa: F401

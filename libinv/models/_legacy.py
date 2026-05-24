@@ -6,7 +6,6 @@ import shutil
 import time
 import traceback
 from datetime import datetime
-from datetime import timedelta
 from datetime import timezone
 from io import BytesIO
 from pathlib import Path
@@ -21,7 +20,6 @@ from packageurl import PackageURL
 from sqlalchemy import JSON
 from sqlalchemy import Boolean
 from sqlalchemy import Column
-from sqlalchemy import Date
 from sqlalchemy import DateTime
 from sqlalchemy import Float
 from sqlalchemy import ForeignKey
@@ -79,147 +77,6 @@ ORGSRE_ACCOUNT_ID = "orgsre"
 
 logger = logging.getLogger(__name__)
 logger.level = logging.DEBUG
-
-
-class PackageLicenseAssociation(Base):
-    __tablename__ = "package_license_association"
-
-    package_id = Column(
-        ForeignKey("libinv.packages.id", onupdate="CASCADE", ondelete="CASCADE"), primary_key=True
-    )
-    license_id = Column(
-        ForeignKey("libinv.license_family.id", onupdate="CASCADE", ondelete="CASCADE"),
-        primary_key=True,
-    )
-
-    # Sprint 37.2: lazy= audit.
-    # - package: never traversed via association.package in api/cli/scanners.
-    # - license: never traversed via association.license in api/cli/scanners (the
-    #   sbom.py selectinload chain stops at Package.licenses; License rows are
-    #   created/queried directly without back-traversal).
-    package = relationship("Package", back_populates="licenses", lazy="raise_on_sql")
-    license = relationship("License", back_populates="packages", lazy="raise_on_sql")
-
-    # Sprint 33.1/33.2: declare indexes already created by alembic 0002_fk_indexes
-    # so `alembic check` / autogenerate treats them as in-sync with the schema.
-    __table_args__ = (
-        Index("ix_package_license_association_license_id", "license_id"),
-        {"schema": "libinv"},
-    )
-
-
-class Package(Base):
-    __tablename__ = "packages"
-
-    id = Column(Integer, primary_key=True)
-    name = Column(String(100), nullable=False)
-    # Sprint 34.1: version/language are nullable=True (legacy packages
-    # may lack metadata); purl is the semantic identifier — required.
-    version = Column(String(150), nullable=True)
-    language = Column(String(20), nullable=True)
-    purl = Column(String(300), unique=True, nullable=False)
-    # Sprint 34.1: server_default guarantees population; mark NOT NULL.
-    created_at = Column(DateTime, server_default=func.now(), nullable=False)
-    updated_at = Column(
-        DateTime,
-        server_default=func.now(),
-        onupdate=func.current_timestamp(),
-        nullable=False,
-    )
-    # Sprint 37.2: lazy= audit.
-    # - images: never traversed in api/cli/scanners (back-ref from Package side).
-    # - licenses: traversed in image_scanner/sbom.py (with selectinload Image.packages
-    #   ... Package.licenses cascade) and sbom.py:138 (package.licenses.append). Keep select.
-    # - vulnerabilities: traversed in image_scanner/sca.py via
-    #   selectinload(Package.vulnerabilities). Keep select.
-    images = relationship(
-        "ImagePackageAssociation", back_populates="package", lazy="raise_on_sql"
-    )
-    licenses = relationship("PackageLicenseAssociation", back_populates="package", lazy="select")
-    vulnerabilities = relationship(
-        "VulnerabilityPackageAssociation", back_populates="package", lazy="select"
-    )
-
-    def __str__(self):
-        return self.purl
-
-
-class VulnerabilityPackageAssociation(Base):
-    __tablename__ = "vulnerability_package_association"
-    vulnerability_id = Column(
-        String(50),
-        ForeignKey("libinv.vulnerabilities.id", ondelete="CASCADE", onupdate="CASCADE"),
-        primary_key=True,
-    )
-    package_id = Column(
-        Integer,
-        ForeignKey("libinv.packages.id", ondelete="CASCADE", onupdate="CASCADE"),
-        primary_key=True,
-    )
-    fix = Column(String(100), doc="comma seperated list of fix versions", nullable=True)
-
-    # Sprint 37.2: lazy= audit.
-    # - vulnerability: traversed in image_scanner/sca.py via
-    #   selectinload(...VulnerabilityPackageAssociation.vulnerability). Keep select.
-    # - package: back-ref never traversed in api/cli/scanners.
-    vulnerability = relationship("Vulnerability", back_populates="packages", lazy="select")
-    package = relationship("Package", back_populates="vulnerabilities", lazy="raise_on_sql")
-
-    # Sprint 33.1/33.2: declare indexes already created by alembic 0002_fk_indexes
-    __table_args__ = (
-        Index("ix_vulnerability_package_association_package_id", "package_id"),
-        {"schema": "libinv"},
-    )
-
-
-class Vulnerability(Base):
-    __tablename__ = "vulnerabilities"
-
-    id = Column(String(50), primary_key=True)
-    # Sprint 34.1: upstream-feed-derived fields — feeds may omit any of them.
-    description = Column(String(MAX_LENGTH_VULNERABILITY_DESCRIPTION), nullable=True)
-    severity = Column(String(10), nullable=True)
-    related = Column(
-        String(200), doc="comma seperated list of related cve ids", nullable=True
-    )
-    nvd_cvss_base_score = Column(
-        "nvd-cvss.base_score", Float(precision=3), nullable=True
-    )
-    nvd_cvss_exploitability_score = Column(
-        "nvd-cvss.exploitability_score", Float(precision=3), nullable=True
-    )
-    nvd_cvss_impact_score = Column(
-        "nvd-cvss.impact_score", Float(precision=3), nullable=True
-    )
-    # Sprint 37.2: back-ref never traversed in api/cli/scanners (only the forward
-    # VulnerabilityPackageAssociation.vulnerability direction is read).
-    packages = relationship(
-        "VulnerabilityPackageAssociation", back_populates="vulnerability", lazy="raise_on_sql"
-    )
-
-    def set_description(self, desc: str):
-        if desc:
-            self.description = desc[:MAX_LENGTH_VULNERABILITY_DESCRIPTION]
-
-    def __str__(self):
-        return self.id
-
-
-class License(Base):
-    __tablename__ = "license_family"
-
-    id = Column(Integer, primary_key=True)
-    # Sprint 34.1: license name is the semantic key (unique) — required.
-    name = Column(String(MAX_LENGTH_LICENSE), unique=True, nullable=False)
-    # Sprint 37.2: back-ref never traversed in api/cli/scanners (only the forward
-    # Package.licenses direction is read in sbom.py).
-    packages = relationship(
-        "PackageLicenseAssociation", back_populates="license", lazy="raise_on_sql"
-    )
-
-    def set_license_name(self, name):
-        if name:
-            self.name = name[:MAX_LENGTH_LICENSE]
 
 
 class Repository(Base):
@@ -1751,154 +1608,6 @@ def is_blacklist(package_name):
     return False
 
 
-class EPSS(Base):
-    """
-    EPSS (Exploit Prediction Scoring System) model to store CVE EPSS scores
-    """
-
-    __tablename__ = "epss"
-
-    cve = Column(String(50), primary_key=True, nullable=False)
-    epss_score = Column(Float(precision=6), nullable=False)
-    epss_percentile = Column(Float(precision=6), nullable=False)
-    # Sprint 34.2: epss_date promoted from String(20) to native DATE for
-    # proper ordering / range queries. Migration 0003 ALTERs the column with
-    # ``USING epss_date::date`` so existing 'YYYY-MM-DD' string rows convert
-    # losslessly. Callers should pass either a ``datetime.date`` or an
-    # ISO-8601 'YYYY-MM-DD' string — psycopg2 parses both.
-    epss_date = Column(Date, nullable=True)
-    # Sprint 34.1: server_default guarantees population — NOT NULL.
-    updated_at = Column(
-        DateTime(timezone=True),
-        server_default=func.now(),
-        onupdate=func.now(),
-        nullable=False,
-    )
-
-    # Sprint 33.1/33.2: declare composite index already created by alembic 0002_fk_indexes
-    __table_args__ = (
-        Index("ix_epss_cve_updated_at", "cve", "updated_at"),
-        {"schema": "libinv"},
-    )
-
-    def __str__(self):
-        return f"{self.cve} - {self.epss_score}"
-
-    @classmethod
-    def get_fresh_cves(cls, session, cve_list, days=30):
-
-        stale_threshold = datetime.now(timezone.utc) - timedelta(days=days)
-
-        fresh_cves = set(
-            r.cve
-            for r in session.query(cls.cve)
-            .filter(cls.cve.in_(cve_list))
-            .filter(cls.updated_at > stale_threshold)
-            .all()
-        )
-        return fresh_cves
-
-    @classmethod
-    def get_stale_or_missing_cves(cls, session, cve_list, days=30):
-        fresh_cves = cls.get_fresh_cves(session, cve_list, days)
-        return [cve for cve in cve_list if cve not in fresh_cves]
-
-    @classmethod
-    def refresh_cves(cls, session, cve_list, verbose=False, logger=None):
-        valid_cves_upper = [c.upper() for c in cve_list]
-        # Use model methods to determine which CVEs need updates
-        to_fetch = cls.get_stale_or_missing_cves(session, valid_cves_upper)
-        fresh_cves = cls.get_fresh_cves(session, valid_cves_upper)
-
-        updated, skipped, failed = 0, 0, len(fresh_cves)
-
-        if verbose and fresh_cves and logger:
-            logger.warning(f"Skipping {len(fresh_cves)} fresh CVEs (updated within 30 days)")
-
-        # Fetch from API if needed
-        if to_fetch:
-            if logger:
-                logger.warning(f"Fetching {len(to_fetch)} CVEs from EPSS API...")
-
-            batch_size = 100
-            for i in range(0, len(to_fetch), batch_size):
-                if i > 0:
-                    # Polite rate-limit between batches against the public EPSS API.
-                    time.sleep(0.5)
-                batch = to_fetch[i : i + batch_size]
-                cve_string = ",".join(batch)
-                try:
-                    response = requests.get(
-                        f"https://api.first.org/data/v1/epss?cve={cve_string}", timeout=30
-                    )
-                    if response.status_code == 200:
-                        api_data = response.json()
-                        new_epss_data = {}
-                        found_cves = set()
-                        for item in api_data.get("data", []):
-                            cve_id = item.get("cve", "").upper()
-                            found_cves.add(cve_id)
-                            new_epss_data[cve_id] = {
-                                "epss_score": float(item.get("epss", 0)),
-                                "epss_percentile": float(item.get("percentile", 0)),
-                                "epss_date": item.get("date", ""),
-                            }
-
-                        for cve_nf in batch:
-                            if cve_nf not in found_cves:
-                                if logger:
-                                    logger.warning(f"CVE {cve_nf} not found in EPSS API, skipping")
-                                continue
-
-                        cls.update_epss_scores(session, new_epss_data)
-                        updated += len([cve for cve in batch if cve in found_cves])
-                        failed += len([cve for cve in batch if cve not in found_cves])
-                    else:
-                        if logger:
-                            logger.error(f"API error: {response.status_code} {response.text}")
-                        failed += len(batch)
-                except Exception as e:
-                    if logger:
-                        logger.error(f"Error fetching EPSS data: {e}")
-                    failed += len(batch)
-
-        return {"updated": updated, "skipped": skipped, "failed": failed}
-
-    @classmethod
-    def update_epss_scores(cls, session, epss_data_dict):
-        """Bulk-upsert EPSS scores via INSERT ... ON CONFLICT DO UPDATE.
-
-        One round trip per batch instead of one SELECT + one INSERT/UPDATE
-        per CVE.
-        """
-        if not epss_data_dict:
-            return
-
-        now = datetime.now(timezone.utc)
-        rows = [
-            {
-                "cve": cve_id,
-                "epss_score": data["epss_score"],
-                "epss_percentile": data["epss_percentile"],
-                "epss_date": data["epss_date"],
-                "updated_at": now,
-            }
-            for cve_id, data in epss_data_dict.items()
-        ]
-        stmt = pg_insert(cls).values(rows)
-        stmt = stmt.on_conflict_do_update(
-            index_elements=[cls.cve],
-            set_={
-                "epss_score": stmt.excluded.epss_score,
-                "epss_percentile": stmt.excluded.epss_percentile,
-                "epss_date": stmt.excluded.epss_date,
-                "updated_at": stmt.excluded.updated_at,
-            },
-        )
-        session.execute(stmt)
-        session.commit()
-
-
 def sort_versions(version_list):
     """
     Sorts a list of semantic version strings.
@@ -1928,4 +1637,18 @@ from libinv.models.image import Image  # noqa: E402,F401
 from libinv.models.image import ImagePackageAssociation  # noqa: E402,F401
 from libinv.models.image import Layer  # noqa: E402,F401
 from libinv.models.image import LatestImage  # noqa: E402,F401
+
+# Sprint 40.1: Package-domain classes live in libinv/models/package.py.
+# Back-import so historical ``from libinv.models._legacy import Package``
+# callers (and any internal helpers) continue to find these names.
+from libinv.models.package import License  # noqa: E402,F401
+from libinv.models.package import Package  # noqa: E402,F401
+from libinv.models.package import PackageLicenseAssociation  # noqa: E402,F401
+
+# Sprint 40.2: Vulnerability-domain classes live in libinv/models/vulnerability.py.
+from libinv.models.vulnerability import Vulnerability  # noqa: E402,F401
+from libinv.models.vulnerability import VulnerabilityPackageAssociation  # noqa: E402,F401
+
+# Sprint 40.3: EPSS-domain class lives in libinv/models/epss.py.
+from libinv.models.epss import EPSS  # noqa: E402,F401
 
