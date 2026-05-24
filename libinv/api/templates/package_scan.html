@@ -87,8 +87,8 @@
                                                 <td>
                             {% if scan.vulnerabilities %} 
                                 <div class="d-flex flex-wrap gap-2 align-items-center">
-                                    {% if scan.vulnerabilitiy_severities %}
-                                        {% for item in scan.vulnerabilitiy_severities %}
+                                    {% if scan.vulnerability_severities %}
+                                        {% for item in scan.vulnerability_severities %}
                                             {% if item.count > 0 %}
                                                 <span class="vuln-tag {% if item.severity_level == 'critical' %}critical{% elif item.severity_level == 'high' %}high{% elif item.severity_level == 'medium' %}medium{% elif item.severity_level == 'low' %}low{% else %}unknown{% endif %}" title="Classification based on EPSS scores (Critical: >0.8, High: 0.7-0.8, Medium: 0.5-0.7, Low: ≤0.5) with CVSS fallback (Critical: ≥9.0, High: 7.0-8.9, Medium: 4.0-6.9, Low: >0)">
                                                     {{ item.severity_level }} {{ item.count }}

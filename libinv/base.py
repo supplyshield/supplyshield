@@ -1,3 +1,4 @@
+import warnings
 from contextlib import contextmanager
 
 import sqlalchemy as db
@@ -14,12 +15,58 @@ Session = sessionmaker(bind=engine)
 
 ScopedSession = scoped_session(Session)
 
+
+class _ConnDeprecationProxy:
+    """Proxy that emits a one-shot DeprecationWarning on first use of `conn`.
+
+    Sprint 0-12 migrated every libinv caller from `conn.<method>` to
+    `with session_scope() as session: session.<method>` or the
+    `s = session or conn` fallback inside methods that accept an
+    optional `session=` kwarg. The `conn` symbol is retained only for
+    that fallback (which uses `or conn` -- accesses `conn` only when
+    `session is None`).
+
+    Any *direct* `conn.<method>` call surfaces here and warns. The
+    warning fires once per process to avoid log spam.
+    """
+
+    _warned = False
+
+    def __init__(self, target):
+        self._target = target
+
+    def _warn_once(self):
+        if not _ConnDeprecationProxy._warned:
+            _ConnDeprecationProxy._warned = True
+            warnings.warn(
+                "libinv.base.conn is deprecated; use `session_scope()` or "
+                "accept an explicit `session` parameter.",
+                DeprecationWarning,
+                stacklevel=3,
+            )
+
+    def __getattr__(self, name):
+        self._warn_once()
+        return getattr(self._target, name)
+
+    def __call__(self, *args, **kwargs):
+        self._warn_once()
+        return self._target(*args, **kwargs)
+
+    def __bool__(self):
+        # Used by `s = session or conn` -- must not warn on `bool(conn)`
+        # because that's the explicit fallback case Sprint 0-12 left in
+        # place. Return True so `or conn` resolves to `conn` itself
+        # when `session` is None/falsy.
+        return True
+
+
 # DEPRECATED: prefer `session_scope()` for explicit-lifecycle code, or accept a
 # `session` parameter on model methods (see `Actionable.get_latest` / `get_safe_versions`
 # for the canonical pattern). `conn` is kept as an alias for the scoped session so the
 # ~30 existing call sites keep working; new code should not use it. Slated for removal
 # once all callers are migrated (tracked under Sprint 4+).
-conn = ScopedSession
+conn = _ConnDeprecationProxy(ScopedSession)
 
 
 class LibinvBase:

@@ -229,10 +229,6 @@ class Vulnerability(Base):
         if desc:
             self.description = desc[:MAX_LENGTH_VULNERABILITY_DESCRIPTION]
 
-    # Deprecated alias retained for backward compatibility; remove once
-    # all callers have migrated.
-    set_desciption = set_description
-
     def __str__(self):
         return self.id
 
@@ -446,10 +442,6 @@ class LatestImage(Base):
            """
         )
         session.execute(stmt, {"checkpoint": checkpoint})
-
-    # Deprecated alias retained for backward compatibility; remove once
-    # all callers have migrated.
-    callibrate = calibrate
 
 
 class Secbug(Base, TimestampMixin):
@@ -1203,7 +1195,7 @@ class ActionablePackageAvailableVersion(Base):
             return int(total_vulnerabilities)
 
     @property
-    def vulnerabilitiy_severities(self):
+    def vulnerability_severities(self):
         query = text(
             """
             WITH RECURSIVE severities(level) AS (
@@ -1249,7 +1241,7 @@ class ActionablePackageAvailableVersion(Base):
 
     @property
     def score(self):
-        severities = self.vulnerabilitiy_severities
+        severities = self.vulnerability_severities
         if not severities:
             return None
         score = 0
