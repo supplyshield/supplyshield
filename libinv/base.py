@@ -13,6 +13,12 @@ engine = db.create_engine(DB_STRING, pool_pre_ping=True)
 Session = sessionmaker(bind=engine)
 
 ScopedSession = scoped_session(Session)
+
+# DEPRECATED: prefer `session_scope()` for explicit-lifecycle code, or accept a
+# `session` parameter on model methods (see `Actionable.get_latest` / `get_safe_versions`
+# for the canonical pattern). `conn` is kept as an alias for the scoped session so the
+# ~30 existing call sites keep working; new code should not use it. Slated for removal
+# once all callers are migrated (tracked under Sprint 4+).
 conn = ScopedSession
 
 

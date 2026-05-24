@@ -91,11 +91,9 @@ crons:
 	@${ACTIVATE}; python3 libinv/cron_scheduler.py
 
 coverage: tests
-tests: doctests
-
-doctests:
-	@echo "-> Running doc tests"
-	@${ACTIVATE}; coverage run -m pytest --doctest-modules --ignore-glob="*scio_models.py" libinv
+tests:
+	@echo "-> Running tests (doctests + unit tests)"
+	@${ACTIVATE}; coverage run -m pytest
 
 
 install: virtualenv deps
@@ -103,4 +101,4 @@ install: virtualenv deps
 docs:
 	@${ACTIVATE}; cd docs; pip3 install sphinx_rtd_theme; make html
 
-.PHONY: docs
+.PHONY: docs tests coverage
