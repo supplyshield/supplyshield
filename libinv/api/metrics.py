@@ -55,6 +55,20 @@ scan_failures_total = Counter(
     labelnames=("type", "error_class"),
     registry=_registry,
 )
+# Sprint 27: scan-duration histogram. Buckets span seconds (cdxgen on
+# small repos) to ~1h (scancodeio on large monorepos), so we use explicit
+# buckets covering 3 orders of magnitude instead of the prometheus
+# default (which tops out at ~10s).
+SCAN_DURATION_BUCKETS = (
+    1, 5, 10, 30, 60, 120, 300, 600, 1200, 1800, 3600, float("inf"),
+)
+scan_duration_seconds = Histogram(
+    "libinv_scan_duration_seconds",
+    "Wall-clock time of scan invocations.",
+    labelnames=("type",),
+    buckets=SCAN_DURATION_BUCKETS,
+    registry=_registry,
+)
 up = Gauge(
     "libinv_up",
     "1 if libinv's Flask app is reachable.",

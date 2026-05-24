@@ -229,3 +229,66 @@ def test_run_cdxgen_scan_increments_failures_on_exception():
             cdx_scanner.run_cdxgen_scan(wasp)
 
     assert _failure_value("cdxgen", "RuntimeError") == before + 1
+
+
+# ---------------------------------------------------------------------------
+# Sprint 27 — scan_duration_seconds histogram. Combined with
+# scan_invocations_total and scan_failures_total this lets dashboards
+# compute p50/p95/p99 latency by scan type AND success rate.
+#
+# We assert the histogram's _sum advanced on each scan path. The exact
+# observed duration is non-deterministic (it's wall-clock), but the
+# Sprint 25/26 mocked scans run in <<1s so the _sum delta will be small
+# but strictly > 0.
+# ---------------------------------------------------------------------------
+def _duration_sum(label_type: str) -> float:
+    from libinv.api.metrics import scan_duration_seconds
+
+    return scan_duration_seconds.labels(type=label_type)._sum.get()
+
+
+def test_image_scan_records_duration():
+    from libinv.scanners.image_scanner.scanner import scan_image_index
+
+    before = _duration_sum("image")
+
+    image_index = MagicMock()
+    image_index.pull_images_if_not_exist.return_value = iter([])
+
+    scan_image_index(image_index, account_id="acct-test")
+
+    assert _duration_sum("image") >= before
+
+
+def test_repository_bridge_records_duration():
+    from libinv.scanners.repository_scanner.bridge import (
+        connect_using_queue_message_agreement,
+    )
+
+    before = _duration_sum("repository_bridge")
+
+    wasp = MagicMock()
+    wasp.raw_message = '{"ecr_image": [], "aws_environment": "stage"}'
+
+    connect_using_queue_message_agreement(wasp, session=MagicMock())
+
+    assert _duration_sum("repository_bridge") >= before
+
+
+def test_run_cdxgen_scan_records_duration():
+    from libinv.scanners.repository_scanner import cdx_scanner
+
+    before = _duration_sum("cdxgen")
+
+    fake_scanner = MagicMock()
+    fake_scanner.errors = ""
+    fake_scanner.run.return_value = "/tmp/fake.sbom.cdx.json"
+
+    wasp = MagicMock()
+    wasp.repo_dir = "/tmp/repo"
+    wasp.project_dir = "/tmp/project"
+
+    with patch.object(cdx_scanner, "CdxScanner", return_value=fake_scanner):
+        cdx_scanner.run_cdxgen_scan(wasp)
+
+    assert _duration_sum("cdxgen") >= before

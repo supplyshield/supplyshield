@@ -18,6 +18,8 @@ SupplyShield is an application security orchestration tool for DevSecOps require
    installation
    architecture
    configuration
+   deployment
+   troubleshooting
 
 Indices and tables
 ==================
