@@ -4,8 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 import click
 
 from libinv.base import ScopedSession
-from libinv.base import Session
-from libinv.base import conn
+from libinv.base import session_scope
 from libinv.cli.cli import cli
 from libinv.models import Actionable
 from libinv.models import ActionablePackageAvailableVersion
@@ -19,11 +18,17 @@ logger.setLevel(logging.DEBUG)
 def populate_actionable_purl_versions():
     logger.info(f"[+] Populating actionable purl versions..")
 
-    actionable_packages = conn.query(Actionable).all()
-    logger.info(f"Populating versions for {len(actionable_packages)} packages..")
+    with session_scope() as session:
+        actionable_packages = session.query(Actionable).all()
+        logger.info(f"Populating versions for {len(actionable_packages)} packages..")
 
-    for package in actionable_packages:
-        package.fetch_and_store_versions()
+        for package in actionable_packages:
+            # Note: package.fetch_and_store_versions() uses the module-level
+            # `conn` (scoped session) internally, which resolves to this same
+            # thread-local session. Per-row commits inside the model method
+            # may commit this outer session_scope early — pre-existing
+            # behavior, not introduced by this migration.
+            package.fetch_and_store_versions()
 
 
 @cli.command
@@ -42,6 +47,9 @@ def scan_versions_in_use():
                 return
             package.scan_and_update_results()
         finally:
+            # Worker-thread session isolation (Sprint 0). Do NOT wrap the
+            # outer executor in session_scope — that would bind the
+            # dispatcher thread's session to the entire executor lifetime.
             ScopedSession.remove()
 
     # Use ThreadPoolExecutor for concurrent scanning
@@ -53,11 +61,12 @@ def scan_versions_in_use():
 def update_latest_version_tag():
     logger.info(f"[+] Tagging latest versions..")
 
-    actionable_packages = conn.query(Actionable).all()
-    logger.info(f"Tagging {len(actionable_packages)} packages..")
+    with session_scope() as session:
+        actionable_packages = session.query(Actionable).all()
+        logger.info(f"Tagging {len(actionable_packages)} packages..")
 
-    for package in actionable_packages:
-        package.mark_latest_version()
+        for package in actionable_packages:
+            package.mark_latest_version()
 
 
 @cli.command
@@ -84,52 +93,64 @@ def scan_latest_versions():
         - In this case, we scan 1.7 as there is no known safe version available in between.
     """
     logger.info(f"[+] Scanning latest versions..")
-    actionable_packages = conn.query(Actionable).all()
 
-    for actionable_package in actionable_packages:
-        logger.info(f"Scanning latest version for {actionable_package.package_url}..")
-        try:
-            versions_in_use = actionable_package.get_versions_in_use(conn)
-            for version in versions_in_use:
-                if not version.scanned:
-                    logger.error(
-                        f"Version {version.version} for {actionable_package.package_url} not scanned. Skipping."
-                    )
+    with session_scope() as session:
+        actionable_packages = session.query(Actionable).all()
 
-                if version.is_safe:
-                    continue
+        for actionable_package in actionable_packages:
+            logger.info(f"Scanning latest version for {actionable_package.package_url}..")
+            try:
+                versions_in_use = actionable_package.get_versions_in_use(session)
+                for version in versions_in_use:
+                    if not version.scanned:
+                        logger.error(
+                            f"Version {version.version} for {actionable_package.package_url} not scanned. Skipping."
+                        )
 
-                if version.get_safe_upgrade() is not None:
-                    continue
+                    if version.is_safe:
+                        continue
 
-                latest_package = actionable_package.get_latest()
-                logger.info(f"Scanning latest version {latest_package.version}")
-                latest_package.scan_and_update_results()
-        except Exception as e:
-            logger.error(f"Error scanning latest version for {actionable_package.package_url}: {e}")
+                    if version.get_safe_upgrade() is not None:
+                        continue
+
+                    latest_package = actionable_package.get_latest()
+                    logger.info(f"Scanning latest version {latest_package.version}")
+                    latest_package.scan_and_update_results()
+            except Exception as e:
+                logger.error(f"Error scanning latest version for {actionable_package.package_url}: {e}")
 
 
 @cli.command
 def rescan_failed_packages():
     logger.info(f"[+] Rescanning failed packages..")
 
-    scan_failed_packages = ActionablePackageAvailableVersion.get_scan_failed_packages()
-    logger.info(f"Rescanning {len(scan_failed_packages)} packages..")
-    for package in scan_failed_packages:
-        package.scan_and_update_results()
+    with session_scope() as session:
+        scan_failed_packages = ActionablePackageAvailableVersion.get_scan_failed_packages()
+        logger.info(f"Rescanning {len(scan_failed_packages)} packages..")
+        for package in scan_failed_packages:
+            package.scan_and_update_results()
 
 
 @cli.command
 def populate_next_safe_versions():
     logger.info(f"[+] Finding closest safe version..")
 
-    actionable_packages = conn.query(Actionable).all()
+    # Fetch the package list under a short-lived session_scope so the
+    # dispatcher thread's session is released before workers start. Each
+    # worker manages its own scoped session via the finally block below.
+    with session_scope() as session:
+        actionable_packages = session.query(Actionable).all()
     logger.info(f"Populating next safe version for {len(actionable_packages)} packages..")
 
     def process_package(package):
         try:
             logger.info(f"Finding safe version for {package.package_url}..")
-            versions_used = package.get_versions_in_use(conn)
+            # `package` was loaded in the dispatcher's now-closed session.
+            # Model methods reach the scoped session via `conn` (per-thread),
+            # so reads here use this worker thread's fresh session. Passing
+            # the `ScopedSession` proxy preserves original-call semantics —
+            # query() is proxied to the per-thread Session.
+            versions_used = package.get_versions_in_use(ScopedSession)
 
             logger.info(f"Found {len(versions_used)} versions in use..")
 
@@ -157,6 +178,7 @@ def populate_next_safe_versions():
 
                 package.find_safe_version_in(potential_safe_upgrades)
         finally:
+            # Worker-thread session isolation (Sprint 0).
             ScopedSession.remove()
 
     with ThreadPoolExecutor() as executor:
@@ -172,9 +194,9 @@ def get_actionable_for(repository_id, environment):
     table = PrettyTable()
     table.field_names = ["Current Package", "Current Version", "Suggested Versions"]
 
-    repository = conn.query(Repository).filter(Repository.id == repository_id).first()
-    logger.info(f"[+] Getting actionable purls for {repository.name}..")
-    with Session() as session:
+    with session_scope() as session:
+        repository = session.query(Repository).filter(Repository.id == repository_id).first()
+        logger.info(f"[+] Getting actionable purls for {repository.name}..")
         actionable_packages = Actionable.get_actionable(session, repository_id, environment)
         for package in actionable_packages:
             if not package.available_version.is_safe:
@@ -194,32 +216,35 @@ def get_actionable_for(repository_id, environment):
 @cli.command("scan-purl", help="Scan a package url for vulnerabilities")
 @click.argument("package-url", type=str)
 def scan_package(package_url):
-    packages = (
-        conn.query(ActionablePackageAvailableVersion)
-        .filter(ActionablePackageAvailableVersion.package_url == package_url)
-        .all()
-    )
-    for package in packages:
-        logger.info(f"Scanning {package_url}@{package.version}..")
-        package.scan_and_update_results()
+    with session_scope() as session:
+        packages = (
+            session.query(ActionablePackageAvailableVersion)
+            .filter(ActionablePackageAvailableVersion.package_url == package_url)
+            .all()
+        )
+        for package in packages:
+            logger.info(f"Scanning {package_url}@{package.version}..")
+            package.scan_and_update_results()
 
 
 @cli.command("safe-version", help="Get the safe version for a package url")
 @click.argument("version", type=str)
 def get_safe_version(package_url):
-    packages = (
-        conn.query(ActionablePackageAvailableVersion)
-        .filter(ActionablePackageAvailableVersion.package_url == package_url)
-        .first()
-    )
-    for package in packages:
-        logger.info(package.get_safe_upgrade())
+    with session_scope() as session:
+        packages = (
+            session.query(ActionablePackageAvailableVersion)
+            .filter(ActionablePackageAvailableVersion.package_url == package_url)
+            .first()
+        )
+        for package in packages:
+            logger.info(package.get_safe_upgrade())
 
 
 @cli.command("raise-sca-as-git-issue", help="")
 @click.argument("git-url", type=str)
 def raise_sca_as_git_issue(git_url):
-    repo = Repository.get_by_git_url(git_url)
-    if not repo:
-        return logger.error(f"Couldn't find {git_url} in database")
-    repo.raise_or_update_sca_issues()
+    with session_scope() as session:
+        repo = Repository.get_by_git_url(git_url)
+        if not repo:
+            return logger.error(f"Couldn't find {git_url} in database")
+        repo.raise_or_update_sca_issues()

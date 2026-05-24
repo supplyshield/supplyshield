@@ -4,7 +4,8 @@ from datetime import timezone
 
 from jira import JIRA
 
-from libinv.base import conn
+from libinv.base import conn  # noqa: F401  retained: Secbug.get_any / all_active still use it
+from libinv.base import session_scope
 from libinv.env import JIRA_TOKEN
 from libinv.env import JIRA_URL
 from libinv.env import JIRA_USER
@@ -96,17 +97,19 @@ class JiraSecbug(JiraProject):
         super().__init__(project_name="SECBUG", user=JIRA_USER, token=JIRA_TOKEN)
 
 
-def get_or_update_repository(repository_name: str, pod: str, subpod: str):
-    repository = conn.query(Repository).filter(Repository.name == repository_name).one_or_none()
+def get_or_update_repository(session, repository_name: str, pod: str, subpod: str):
+    repository = (
+        session.query(Repository).filter(Repository.name == repository_name).one_or_none()
+    )
     if not repository:
         logger.error(f"Unknown repository: {repository_name}, lob: {pod}, pod: {subpod}. Skipped")
         # FIXME: We probably want to add this repository, but what's source of truth for pod and
         # subpod ?
-        return
+        return None
 
     try:
-        update_safely(session=conn, model=repository, attr="pod", value=pod)
-        update_safely(session=conn, model=repository, attr="subpod", value=subpod)
+        update_safely(session=session, model=repository, attr="pod", value=pod)
+        update_safely(session=session, model=repository, attr="subpod", value=subpod)
     except ConflictingInfoError as exc:
         logger.warning(exc)
         # FIXME: Something should be done here, for now we ignore and don't update anything
@@ -132,7 +135,7 @@ def to_datetime(date_string):
     return datetime.strptime(date_string, "%Y-%m-%dT%H:%M:%S.%f%z")
 
 
-def delete_outdated_secbugs(all_fetched_secbug_keys):
+def delete_outdated_secbugs(session, all_fetched_secbug_keys):
     # Why don't we use the "resolved" field ?
     # - It isn't consistent across all secbugs (mostly old ones)
 
@@ -149,7 +152,7 @@ def delete_outdated_secbugs(all_fetched_secbug_keys):
             deleted_count += 1
 
     logger.info(f"DEBUG: Deleted {deleted_count} secbugs")
-    conn.commit()
+    # commit handled by outer session_scope()
 
 
 def get_field_value(issue, field_id):
@@ -191,97 +194,132 @@ def create_secbug_data(
     }
 
 
-def process_secbug_repository(repository_name, lob, pod):
+def process_secbug_repository(session, repository_name, lob, pod):
     """Process repository and return repository object if found"""
     if not repository_name:
         return None
 
-    repository = get_or_update_repository(repository_name=repository_name, pod=lob, subpod=pod)
+    repository = get_or_update_repository(
+        session, repository_name=repository_name, pod=lob, subpod=pod
+    )
     return repository
+
+
+def _process_secbug_issue(session, issue, customfield_ids, pulled_at):
+    """Process a single JIRA secbug issue within an open session.
+
+    Extracted from connect() so each issue gets its own session_scope() — a
+    single bad issue rolls back only its own transaction instead of the whole
+    sync.
+    """
+    secbug_id = issue.key
+
+    # Extract all field values
+    environment = get_field_value(issue, customfield_ids["environment"])[:20]
+    severity = fix_severity(issue.fields.priority.name)
+    description = issue.fields.description
+    lob = pop_or_none(safe_get_field(issue, customfield_ids["lob"]))
+    pod = pop_or_none(safe_get_field(issue, customfield_ids["pod"]))
+    created_at = to_datetime(issue.fields.created)
+    updated_at = to_datetime(issue.fields.updated)
+    summary = issue.fields.summary
+    company = get_field_value(issue, customfield_ids["company"])
+    vulnerability_category = get_field_value(issue, customfield_ids["vulnerability_category"])
+    identified_by = get_field_value(issue, customfield_ids["identified_by"])
+
+    # Get repository name from either field
+    repository_name = None
+    repo_url_value = safe_get_field(issue, customfield_ids["repo"])
+    if repo_url_value:
+        repository_name = get_repository_name_from_field(repo_url_value)
+
+    if not repository_name:
+        repo_name_value = safe_get_field(issue, customfield_ids["repo_name"])
+        if repo_name_value:
+            repository_name = get_repository_name_from_field(repo_name_value)
+    # Process repository
+    repository = process_secbug_repository(session, repository_name, lob, pod)
+    repository_id = repository.id if repository else None
+
+    # Create secbug data
+    secbug_data = create_secbug_data(
+        secbug_id=secbug_id,
+        environment=environment,
+        severity=severity,
+        summary=summary,
+        description=description,
+        created_at=created_at,
+        updated_at=updated_at,
+        company=company,
+        vulnerability_category=vulnerability_category,
+        identified_by=identified_by,
+        repository_id=repository_id,
+        pulled_at=pulled_at,
+    )
+
+    # Update existing or create new secbug.
+    # Note: Secbug.get_any still reaches the module-level `conn` internally; the
+    # scoped session means it shares the same thread-local backing as `session`.
+    # A future sprint can thread `session` into the model method.
+    if Secbug.get_any(secbug_id):
+        logger.debug(f"Already exists, updating {secbug_id}")
+        # Always update existing secbugs (original behavior)
+        get_or_update_entry(
+            session=session,
+            model=Secbug,
+            query_filter={"id": secbug_id},
+            deleted_at=None,  # probably recreated, see jql used
+            **{k: v for k, v in secbug_data.items() if k not in ["id", "pulled_at"]},
+        )
+    else:
+        logger.info(f"[+] New secbug: {secbug_id}")
+        # For new secbugs: create if repository found OR no repository specified
+        if repository_name is None:
+            # No repository specified - create secbug without repository
+            logger.warning(f"No repository data present for {secbug_id}")
+            secbug_data_no_repo = {k: v for k, v in secbug_data.items() if k != "repository_id"}
+            get_or_create(session=session, model=Secbug, **secbug_data_no_repo)
+        elif repository is not None:
+            # Repository found - create secbug with repository
+            get_or_create(session=session, model=Secbug, **secbug_data)
+        # If repository_name exists but repository not found - skip (original behavior)
+
+    logger.debug(f"[+] Processed {issue.key}")
 
 
 def connect():
     secbug = JiraSecbug()
-    environment_field_id = secbug.get_customfield_id_by_name("Accessibility")
-    lob_field_id = secbug.get_customfield_id_by_name("pod")
-    pod_field_id = secbug.get_customfield_id_by_name("subpod")
-    repo_field_id = secbug.get_customfield_id_by_name("Github Repo")
-    repo_name_field_id = secbug.get_customfield_id_by_name("Repo Name")
-    company_field_id = secbug.get_customfield_id_by_name("Company")
-    vulnerability_category_id = secbug.get_customfield_id_by_name("OWASP Category")
-    identified_by_id = secbug.get_customfield_id_by_name("Identified Using")
+    customfield_ids = {
+        "environment": secbug.get_customfield_id_by_name("Accessibility"),
+        "lob": secbug.get_customfield_id_by_name("pod"),
+        "pod": secbug.get_customfield_id_by_name("subpod"),
+        "repo": secbug.get_customfield_id_by_name("Github Repo"),
+        "repo_name": secbug.get_customfield_id_by_name("Repo Name"),
+        "company": secbug.get_customfield_id_by_name("Company"),
+        "vulnerability_category": secbug.get_customfield_id_by_name("OWASP Category"),
+        "identified_by": secbug.get_customfield_id_by_name("Identified Using"),
+    }
     pulled_at = datetime.now(timezone.utc)
 
-    delete_outdated_secbugs([issue.key for issue in secbug.issues])
+    # `secbug.issues` is a JQL fetch — no DB work. Materialise the fetched
+    # keys before opening the session_scope so the network call stays outside
+    # the DB transaction.
+    fetched_keys = [issue.key for issue in secbug.issues]
 
+    with session_scope() as session:
+        delete_outdated_secbugs(session, fetched_keys)
+
+    # Per-issue session_scope: one secbug failure rolls back only that issue's
+    # transaction, the rest of the sync still makes progress. This is an
+    # improvement over the previous all-or-nothing semantics.
+    #
+    # NOTE: `secbug.issues` is re-fetched here (a known waste flagged in the
+    # audit as MEDIUM). Preserving original behaviour; dedup deferred to a
+    # later sprint.
     for issue in secbug.issues:
-        secbug_id = issue.key
-
-        # Extract all field values
-        environment = get_field_value(issue, environment_field_id)[:20]
-        severity = fix_severity(issue.fields.priority.name)
-        description = issue.fields.description
-        lob = pop_or_none(safe_get_field(issue, lob_field_id))
-        pod = pop_or_none(safe_get_field(issue, pod_field_id))
-        created_at = to_datetime(issue.fields.created)
-        updated_at = to_datetime(issue.fields.updated)
-        summary = issue.fields.summary
-        company = get_field_value(issue, company_field_id)
-        vulnerability_category = get_field_value(issue, vulnerability_category_id)
-        identified_by = get_field_value(issue, identified_by_id)
-
-        # Get repository name from either field
-        repository_name = None
-        repo_url_value = safe_get_field(issue, repo_field_id)
-        if repo_url_value:
-            repository_name = get_repository_name_from_field(repo_url_value)
-
-        if not repository_name:
-            repo_name_value = safe_get_field(issue, repo_name_field_id)
-            if repo_name_value:
-                repository_name = get_repository_name_from_field(repo_name_value)
-        # Process repository
-        repository = process_secbug_repository(repository_name, lob, pod)
-        repository_id = repository.id if repository else None
-
-        # Create secbug data
-        secbug_data = create_secbug_data(
-            secbug_id=secbug_id,
-            environment=environment,
-            severity=severity,
-            summary=summary,
-            description=description,
-            created_at=created_at,
-            updated_at=updated_at,
-            company=company,
-            vulnerability_category=vulnerability_category,
-            identified_by=identified_by,
-            repository_id=repository_id,
-            pulled_at=pulled_at,
-        )
-
-        # Update existing or create new secbug
-        if Secbug.get_any(secbug_id):
-            logger.debug(f"Already exists, updating {secbug_id}")
-            # Always update existing secbugs (original behavior)
-            get_or_update_entry(
-                session=conn,
-                model=Secbug,
-                query_filter={"id": secbug_id},
-                deleted_at=None,  # probably recreated, see jql used
-                **{k: v for k, v in secbug_data.items() if k not in ["id", "pulled_at"]},
-            )
-        else:
-            logger.info(f"[+] New secbug: {secbug_id}")
-            # For new secbugs: create if repository found OR no repository specified
-            if repository_name is None:
-                # No repository specified - create secbug without repository
-                logger.warning(f"No repository data present for {secbug_id}")
-                secbug_data_no_repo = {k: v for k, v in secbug_data.items() if k != "repository_id"}
-                get_or_create(session=conn, model=Secbug, **secbug_data_no_repo)
-            elif repository is not None:
-                # Repository found - create secbug with repository
-                get_or_create(session=conn, model=Secbug, **secbug_data)
-            # If repository_name exists but repository not found - skip (original behavior)
-
-        logger.debug(f"[+] Processed {issue.key}")
+        try:
+            with session_scope() as session:
+                _process_secbug_issue(session, issue, customfield_ids, pulled_at)
+        except Exception as exc:
+            logger.exception(f"Failed to process secbug {issue.key}: {exc}")
+            # Continue with the next issue rather than aborting the whole sync.
