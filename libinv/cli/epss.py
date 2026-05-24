@@ -30,6 +30,61 @@ def _extract_cves_from_vulns(vulns) -> set[str]:
     return result
 
 
+def _bulk_load_sql_packages_by_project(
+    session, project_uuids: list[str]
+) -> dict[str, list]:
+    """Sprint 43.3: bulk SQL fetch + group-by-project_id, factored out of the
+    legacy SQL path so ``_collect_cves_for_projects`` stays under cc<10.
+    """
+    by_project: dict[str, list] = defaultdict(list)
+    if not project_uuids:
+        return by_project
+    rows = (
+        session.query(DiscoveredPackage)
+        .filter(DiscoveredPackage.project_id.in_(project_uuids))
+        .all()
+    )
+    for pkg in rows:
+        by_project[pkg.project_id].append(pkg)
+    return by_project
+
+
+def _collect_cves_for_project_http(http_client, project_uuid: str) -> set[str]:
+    """Sprint 43.3: HTTP-path single-project fetch, returns CVEs upper-cased."""
+    try:
+        ids = http_client.list_cve_ids_for_project(project_uuid)
+    except Exception as exc:
+        logger.error("HTTP CVE fetch failed for %s: %s", project_uuid, exc)
+        return set()
+    return {cid.upper() for cid in ids}
+
+
+def _collect_cves_for_project_sql(by_project: dict[str, list], project_uuid: str) -> set[str]:
+    """Sprint 43.3: SQL-path single-project fetch from the pre-grouped dict."""
+    result: set[str] = set()
+    for pkg in by_project.get(project_uuid, []):
+        vulns = getattr(pkg, "affected_by_vulnerabilities", []) or []
+        result.update(_extract_cves_from_vulns(vulns))
+    return result
+
+
+def _emit_progress(idx: int, total: int, cve_count: int, last_percent: int) -> int:
+    """Sprint 43.3: progress-echo at 5% increments. Returns the new
+    ``last_percent`` so the caller can thread it across iterations.
+    """
+    if not total:
+        return last_percent
+    percent = int((idx + 1) * 100 / total)
+    if percent != last_percent and percent % 5 == 0:
+        click.echo(
+            f"Progress: {percent}% ({idx+1}/{total}) - "
+            f"Found {cve_count} unique CVEs so far",
+            nl=True,
+        )
+        return percent
+    return last_percent
+
+
 def _collect_cves_for_projects(
     session,
     project_uuids: list[str],
@@ -45,6 +100,10 @@ def _collect_cves_for_projects(
     Sprint 38.1: the SQL path now issues a single bulk ``WHERE project_id
     IN (:ids)`` query and groups results by ``project_id`` for O(1) lookup,
     eliminating the previous N+1 pattern.
+
+    Sprint 43.3: per-project HTTP/SQL fetch and the progress-emitter were
+    extracted to helpers so this function's cyclomatic complexity dropped
+    from 13 → < 10. Behavior preserved bit-for-bit.
     """
     cve_set: set[str] = set()
     http_client = get_default_client()
@@ -54,41 +113,19 @@ def _collect_cves_for_projects(
     # SQL bulk fetch: one query for the whole input set, grouped in Python.
     # The HTTP path still issues one call per project because each project
     # corresponds to a distinct upstream endpoint.
-    by_project: dict[str, list] = defaultdict(list)
-    if http_client is None and project_uuids:
-        rows = (
-            session.query(DiscoveredPackage)
-            .filter(DiscoveredPackage.project_id.in_(project_uuids))
-            .all()
-        )
-        for pkg in rows:
-            by_project[pkg.project_id].append(pkg)
+    by_project = (
+        _bulk_load_sql_packages_by_project(session, project_uuids)
+        if http_client is None
+        else {}
+    )
 
     for idx, project_uuid in enumerate(project_uuids):
         if http_client is not None:
-            # HTTP path: replaces the inner SQL+loop with one call.
-            try:
-                ids = http_client.list_cve_ids_for_project(project_uuid)
-                cve_set.update(cid.upper() for cid in ids)
-            except Exception as exc:
-                logger.error(
-                    "HTTP CVE fetch failed for %s: %s", project_uuid, exc
-                )
+            cve_set.update(_collect_cves_for_project_http(http_client, project_uuid))
         else:
-            # Legacy SQL path: O(1) lookup into the pre-grouped dict.
-            for pkg in by_project.get(project_uuid, []):
-                vulns = getattr(pkg, "affected_by_vulnerabilities", []) or []
-                cve_set.update(_extract_cves_from_vulns(vulns))
+            cve_set.update(_collect_cves_for_project_sql(by_project, project_uuid))
 
-        if total:
-            percent = int((idx + 1) * 100 / total)
-            if percent != last_percent and percent % 5 == 0:
-                click.echo(
-                    f"Progress: {percent}% ({idx+1}/{total}) - "
-                    f"Found {len(cve_set)} unique CVEs so far",
-                    nl=True,
-                )
-                last_percent = percent
+        last_percent = _emit_progress(idx, total, len(cve_set), last_percent)
 
     return cve_set
 

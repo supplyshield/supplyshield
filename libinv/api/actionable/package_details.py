@@ -5,12 +5,8 @@ from flask import render_template
 from flask import request
 from packageurl import PackageURL
 
+from libinv.api.actionable.queries.package_details import PackageDetailsQuery
 from libinv.base import Session
-from libinv.models import EPSS
-from libinv.models import ActionablePackageAvailableVersion
-from libinv.models import Repository
-from libinv.models import Repository_ActionablePackageAvailableVersion
-from libinv.scio_models import DiscoveredPackage
 from libinv.services.scancodeio_client import get_default_client
 
 from libinv.api.actionable import actionable
@@ -49,13 +45,10 @@ def package_details():
     if not package_url or not version:
         return jsonify({"error": "package_url and version parameters required"}), 400
 
+    query = PackageDetailsQuery(package_url=package_url, version=version)
+
     with Session() as session:
-        actionable_package = (
-            session.query(ActionablePackageAvailableVersion)
-            .filter(ActionablePackageAvailableVersion.package_url == package_url)
-            .filter(ActionablePackageAvailableVersion.version == version)
-            .first()
-        )
+        actionable_package = query.fetch_actionable_package(session)
 
     try:
         if actionable_package:
@@ -83,12 +76,7 @@ def package_details():
     with Session() as session:
         # Use the actionable_package we already queried above
         if not actionable_package:
-            actionable_package = (
-                session.query(ActionablePackageAvailableVersion)
-                .filter(ActionablePackageAvailableVersion.package_url == package_url)
-                .filter(ActionablePackageAvailableVersion.version == version)
-                .first()
-            )
+            actionable_package = query.fetch_actionable_package(session)
 
         cve_details = []
         if actionable_package and actionable_package.scancode_project_uuid:
@@ -115,13 +103,8 @@ def package_details():
 
             if discovered_packages is None:
                 # SQL path (default; also used when HTTP fails).
-                discovered_packages = (
-                    session.query(DiscoveredPackage)
-                    .filter(
-                        DiscoveredPackage.project_id
-                        == actionable_package.scancode_project_uuid
-                    )
-                    .all()
+                discovered_packages = query.fetch_discovered_packages_sql(
+                    session, actionable_package.scancode_project_uuid
                 )
 
             # Extract CVEs from vulnerability data
@@ -165,9 +148,7 @@ def package_details():
 
             # Get EPSS scores for these CVEs
             if cve_set:
-                epss_records = session.query(EPSS).filter(EPSS.cve.in_(list(cve_set))).all()
-
-                epss_dict = {record.cve: record for record in epss_records}
+                epss_dict = query.fetch_epss_records(session, cve_set)
 
                 # Build CVE details list
                 for cve in sorted(cve_set):
@@ -189,39 +170,9 @@ def package_details():
         # Get repositories that use this package version
         repositories_using_package = []
         if actionable_package:
-            repo_usage = (
-                session.query(
-                    Repository.id,
-                    Repository.name,
-                    Repository.org,
-                    Repository.provider,
-                    Repository.pod,
-                    Repository.subpod,
-                    Repository_ActionablePackageAvailableVersion.environment,
-                )
-                .join(
-                    Repository_ActionablePackageAvailableVersion,
-                    Repository.id == Repository_ActionablePackageAvailableVersion.repository_id,
-                )
-                .filter(
-                    Repository_ActionablePackageAvailableVersion.actionable_package_version_id
-                    == actionable_package.uuid
-                )
-                .all()
+            repositories_using_package = query.fetch_repositories_using_package(
+                session, actionable_package.uuid
             )
-
-            repositories_using_package = [
-                {
-                    "id": repo.id,
-                    "name": repo.name,
-                    "org": repo.org,
-                    "provider": repo.provider,
-                    "pod": repo.pod,
-                    "subpod": repo.subpod,
-                    "environment": repo.environment,
-                }
-                for repo in repo_usage
-            ]
 
         # Add CVSS scores to CVE details for consistent classification
         for cve_detail in cve_details:

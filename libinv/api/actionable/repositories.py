@@ -1,157 +1,49 @@
 from flask import render_template
 from flask import request
-from sqlalchemy import and_
-from sqlalchemy import distinct
-from sqlalchemy import func
-from sqlalchemy import or_
 
 from libinv.base import Session
-from libinv.models import ActionablePackageAvailableVersion
-from libinv.models import Repository
-from libinv.models import Repository_ActionablePackageAvailableVersion
 
 from libinv.api.actionable import actionable
+from libinv.api.actionable.queries.repository_listing import RepositoryListingQuery
 
 
 @actionable.route("/v3/repositories", methods=["GET"])
 def repositories_listing():
     """
-    Display a list of all repositories with filters and statistics
+    Display a list of all repositories with filters and statistics.
+
+    Sprint 44.1: the query assembly (7 chainable filters / having clauses,
+    3 facet aggregates, GROUP BY / ORDER BY) lives in
+    :class:`~libinv.api.actionable.queries.repository_listing.RepositoryListingQuery`.
+    This handler is now request-binding + response-shaping only; the
+    Sprint 31.2 behavioral tests (37 tests covering every branch) are the
+    contract.
     """
 
     # Get filter parameters
-    environment_filter = request.args.get("environment", "")
-    pod_filter = request.args.get("pod", "")
-    org_filter = request.args.get("org", "")
-    search_query = request.args.get("search", "")
-    has_vulnerabilities = request.args.get("has_vulnerabilities", "")
-    priority_filter = request.args.get("priority", "")
+    params = {
+        "environment": request.args.get("environment", ""),
+        "pod": request.args.get("pod", ""),
+        "org": request.args.get("org", ""),
+        "search": request.args.get("search", ""),
+        "has_vulnerabilities": request.args.get("has_vulnerabilities", ""),
+        "priority": request.args.get("priority", ""),
+    }
 
     with Session() as session:
-        # Base query for repository statistics
-        base_query = (
-            session.query(
-                Repository.id,
-                Repository.name,
-                Repository.org,
-                Repository.provider,
-                Repository.pod,
-                Repository.subpod,
-                Repository_ActionablePackageAvailableVersion.environment,
-                func.count(
-                    distinct(
-                        Repository_ActionablePackageAvailableVersion.actionable_package_version_id
-                    )
-                ).label("total_packages"),
-                func.count(distinct(ActionablePackageAvailableVersion.uuid))
-                .filter(ActionablePackageAvailableVersion.vulns_count > 0)
-                .label("vulnerable_packages"),
-                func.max(ActionablePackageAvailableVersion.epss_score).label("max_epss_score"),
-            )
-            .join(
-                Repository_ActionablePackageAvailableVersion,
-                Repository.id == Repository_ActionablePackageAvailableVersion.repository_id,
-            )
-            .join(
-                ActionablePackageAvailableVersion,
-                Repository_ActionablePackageAvailableVersion.actionable_package_version_id
-                == ActionablePackageAvailableVersion.uuid,
-            )
+        repositories_data, facets = (
+            RepositoryListingQuery(session, params)
+            .having_environment()
+            .having_pod()
+            .having_org()
+            .having_search()
+            .having_vulnerabilities()
+            .having_priority()
+            .with_facet("environments")
+            .with_facet("pods")
+            .with_facet("orgs")
+            .execute()
         )
-
-        # Apply filters
-        if environment_filter:
-            base_query = base_query.filter(
-                Repository_ActionablePackageAvailableVersion.environment == environment_filter
-            )
-
-        if pod_filter:
-            base_query = base_query.filter(Repository.pod == pod_filter)
-
-        if org_filter:
-            base_query = base_query.filter(Repository.org == org_filter)
-
-        if search_query:
-            base_query = base_query.filter(
-                or_(
-                    Repository.name.ilike(f"%{search_query}%"),
-                    Repository.org.ilike(f"%{search_query}%"),
-                )
-            )
-
-        # Group by repository and environment
-        base_query = base_query.group_by(
-            Repository.id,
-            Repository.name,
-            Repository.org,
-            Repository.provider,
-            Repository.pod,
-            Repository.subpod,
-            Repository_ActionablePackageAvailableVersion.environment,
-        )
-
-        # Apply vulnerability filter
-        if has_vulnerabilities == "true":
-            base_query = base_query.having(
-                func.count(distinct(ActionablePackageAvailableVersion.uuid)).filter(
-                    ActionablePackageAvailableVersion.vulns_count > 0
-                )
-                > 0
-            )
-        elif has_vulnerabilities == "false":
-            base_query = base_query.having(
-                func.count(distinct(ActionablePackageAvailableVersion.uuid)).filter(
-                    ActionablePackageAvailableVersion.vulns_count > 0
-                )
-                == 0
-            )
-
-        # Apply priority filter based on EPSS scores
-        if priority_filter == "p0":
-            base_query = base_query.having(
-                func.max(ActionablePackageAvailableVersion.epss_score) > 0.8
-            )
-        elif priority_filter == "p1":
-            base_query = base_query.having(
-                and_(
-                    func.max(ActionablePackageAvailableVersion.epss_score) > 0.7,
-                    func.max(ActionablePackageAvailableVersion.epss_score) <= 0.8,
-                )
-            )
-        elif priority_filter == "p2":
-            base_query = base_query.having(
-                and_(
-                    func.max(ActionablePackageAvailableVersion.epss_score) > 0.5,
-                    func.max(ActionablePackageAvailableVersion.epss_score) <= 0.7,
-                )
-            )
-        elif priority_filter == "p3":
-            base_query = base_query.having(
-                func.max(ActionablePackageAvailableVersion.epss_score) <= 0.5
-            )
-        elif priority_filter == "no_epss":
-            base_query = base_query.having(
-                func.max(ActionablePackageAvailableVersion.epss_score).is_(None)
-            )
-
-        # Order by repository name and environment
-        repositories_data = base_query.order_by(
-            Repository.name, Repository_ActionablePackageAvailableVersion.environment
-        ).all()
-
-        # Get filter options
-        all_environments = (
-            session.query(distinct(Repository_ActionablePackageAvailableVersion.environment))
-            .order_by(Repository_ActionablePackageAvailableVersion.environment)
-            .all()
-        )
-        all_pods = (
-            session.query(distinct(Repository.pod))
-            .filter(Repository.pod.isnot(None))
-            .order_by(Repository.pod)
-            .all()
-        )
-        all_orgs = session.query(distinct(Repository.org)).order_by(Repository.org).all()
 
         # Process data into repository groups
         repositories = {}
@@ -242,18 +134,18 @@ def repositories_listing():
         }
 
         filter_options = {
-            "environments": [env[0] for env in all_environments],
-            "pods": [pod[0] for pod in all_pods],
-            "orgs": [org[0] for org in all_orgs],
+            "environments": facets.get("environments", []),
+            "pods": facets.get("pods", []),
+            "orgs": facets.get("orgs", []),
         }
 
         current_filters = {
-            "environment": environment_filter,
-            "pod": pod_filter,
-            "org": org_filter,
-            "search": search_query,
-            "has_vulnerabilities": has_vulnerabilities,
-            "priority": priority_filter,
+            "environment": params["environment"],
+            "pod": params["pod"],
+            "org": params["org"],
+            "search": params["search"],
+            "has_vulnerabilities": params["has_vulnerabilities"],
+            "priority": params["priority"],
         }
 
     return render_template(
@@ -263,11 +155,11 @@ def repositories_listing():
         filter_options=filter_options,
         current_filters=current_filters,
         no_filters=(
-            environment_filter == ""
-            and pod_filter == ""
-            and org_filter == ""
-            and search_query == ""
-            and has_vulnerabilities == ""
-            and priority_filter == ""
+            params["environment"] == ""
+            and params["pod"] == ""
+            and params["org"] == ""
+            and params["search"] == ""
+            and params["has_vulnerabilities"] == ""
+            and params["priority"] == ""
         ),
     )
