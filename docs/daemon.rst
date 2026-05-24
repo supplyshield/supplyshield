@@ -7,6 +7,14 @@ SupplyShield Daemon facilitates the orchestration to invoke multitude of codebas
 blocking mode. It listens to all deployment messages via a SQS queue to perform relevant
 scans such as run SBOM, SCA, SAST and other automations on the top of codebases being deployed.
 
+The daemon entry point (``libinv/cli/daemon.py``) installs ``SIGTERM`` /
+``SIGINT`` handlers that flip a ``_shutdown_requested`` flag and let the
+current SQS batch finish before exiting (Sprint 11). Per-message failures are
+caught and logged via ``logger.exception`` so a single bad message can no
+longer kill the polling loop (Sprint 0); the daemon continues to the next
+message. Polling failures are similarly logged and retried on the next
+iteration.
+
 .. image:: images/daemon.svg
    :width: 600
    :alt: daemon flow

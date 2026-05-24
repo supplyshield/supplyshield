@@ -31,6 +31,13 @@ SupplyShield runs in a multi-service mode to optimize for respective use cases:
 
 SupplyShield tech stack is Python, Flask, PostgreSQL, Docker and several libraries.
 
+For a deeper walk-through of the codebase layout — including the
+``libinv/api/actionable/`` blueprint split, the ``libinv/services/`` layer,
+the session lifecycle, and CI hardening — see :doc:`architecture`. For a
+catalogue of every environment variable, including the audit-driven
+additions (``LIBINV_API_TOKEN``, ``LIBINV_SCIO_USE_HTTP``,
+``LIBINV_LOG_FORMAT``, ``TEST_DATABASE_URL``), see :doc:`configuration`.
+
 .. include:: daemon.rst
 .. include:: cron.rst
 .. include:: api.rst

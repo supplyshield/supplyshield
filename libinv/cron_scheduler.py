@@ -2,10 +2,12 @@ import logging
 import os
 import subprocess
 import time
+import uuid
 
 import schedule
 
 from libinv.env import JOBS
+from libinv.logger import request_id_var
 
 logging.basicConfig(
     level=logging.DEBUG, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
@@ -17,45 +19,52 @@ JOBS = JOBS
 
 
 def execute_command(command, timeout):
-    logger.debug(f"Executing command: {command}")
+    job_id = uuid.uuid4().hex
+    token = request_id_var.set(job_id)
     try:
-        process = subprocess.Popen(
-            command,
-            shell=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,  # Merge stderr with stdout for real-time output
-            universal_newlines=True,
-            bufsize=1,  # Line buffered
-            env=dict(os.environ),
-        )
+        logger.info("Executing command [%s]: %s", job_id, command)
+        try:
+            env = dict(os.environ)
+            env["LIBINV_REQUEST_ID"] = job_id
+            process = subprocess.Popen(
+                command,
+                shell=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,  # Merge stderr with stdout for real-time output
+                universal_newlines=True,
+                bufsize=1,  # Line buffered
+                env=env,
+            )
 
-        # Read output line by line in real-time
-        start_time = time.time()
-        while True:
-            output = process.stdout.readline()
-            if output == "" and process.poll() is not None:
-                break
-            if output:
-                # Log each line immediately as it's received
-                logger.info(f"[{command.split()[0]}] {output.strip()}")
+            # Read output line by line in real-time
+            start_time = time.time()
+            while True:
+                output = process.stdout.readline()
+                if output == "" and process.poll() is not None:
+                    break
+                if output:
+                    # Log each line immediately as it's received
+                    logger.info(f"[{command.split()[0]}] {output.strip()}")
 
-            # Check for timeout
-            if time.time() - start_time > timeout:
+                # Check for timeout
+                if time.time() - start_time > timeout:
+                    process.kill()
+                    logger.error(f"Failed: {command} timed out after {timeout} seconds.")
+                    return
+
+            # Wait for process to complete and get return code
+            return_code = process.poll()
+            if return_code == 0:
+                logger.debug(f"Command completed successfully: {command}")
+            else:
+                logger.error(f"Command failed with return code {return_code}: {command}")
+
+        except Exception as e:
+            logger.error(f"Error executing command '{command}': {e}")
+            if "process" in locals():
                 process.kill()
-                logger.error(f"Failed: {command} timed out after {timeout} seconds.")
-                return
-
-        # Wait for process to complete and get return code
-        return_code = process.poll()
-        if return_code == 0:
-            logger.debug(f"Command completed successfully: {command}")
-        else:
-            logger.error(f"Command failed with return code {return_code}: {command}")
-
-    except Exception as e:
-        logger.error(f"Error executing command '{command}': {e}")
-        if "process" in locals():
-            process.kill()
+    finally:
+        request_id_var.reset(token)
 
 
 def run_all_once():

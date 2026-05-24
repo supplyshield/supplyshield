@@ -10,8 +10,72 @@ from libinv.cli.cli import cli
 from libinv.models import EPSS
 from libinv.models import ActionablePackageAvailableVersion
 from libinv.scio_models import DiscoveredPackage
+from libinv.services.scancodeio_client import get_default_client
 
 logger = logging.getLogger(__name__)
+
+
+def _collect_cves_for_projects(
+    session,
+    project_uuids: list[str],
+    verbose: bool,
+) -> set[str]:
+    """Return uppercased CVE ids referenced by the given scancode projects.
+
+    Uses the HTTP client when ``LIBINV_SCIO_USE_HTTP`` is set; falls back
+    to direct SQL queries on ``DiscoveredPackage`` otherwise. The HTTP
+    path raises ``ScancodeioError`` on per-project failure; we log and
+    skip rather than abort the whole run.
+    """
+    cve_set: set[str] = set()
+    http_client = get_default_client()
+    total = len(project_uuids)
+    last_percent = -1
+
+    for idx, project_uuid in enumerate(project_uuids):
+        if http_client is not None:
+            # HTTP path: replaces the inner SQL+loop with one call.
+            try:
+                ids = http_client.list_cve_ids_for_project(project_uuid)
+                cve_set.update(cid.upper() for cid in ids)
+            except Exception as exc:
+                logger.error(
+                    "HTTP CVE fetch failed for %s: %s", project_uuid, exc
+                )
+        else:
+            # Legacy SQL path: unchanged behaviour when flag is unset.
+            discovered = (
+                session.query(DiscoveredPackage)
+                .filter(DiscoveredPackage.project_id == project_uuid)
+                .all()
+            )
+
+            for pkg in discovered:
+                vulns = getattr(pkg, "affected_by_vulnerabilities", []) or []
+                for vuln in vulns:
+                    try:
+                        aliases = vuln.get("aliases", [])
+                        cve_ids = [
+                            alias for alias in aliases if alias.startswith("CVE-")
+                        ]
+                        for cid in cve_ids:
+                            cve_set.add(cid.upper())
+                    except (AttributeError, TypeError):
+                        logger.error(
+                            f"Error processing vulnerability data: {vuln}"
+                        )
+
+        if total:
+            percent = int((idx + 1) * 100 / total)
+            if percent != last_percent and percent % 5 == 0:
+                click.echo(
+                    f"Progress: {percent}% ({idx+1}/{total}) - "
+                    f"Found {len(cve_set)} unique CVEs so far",
+                    nl=True,
+                )
+                last_percent = percent
+
+    return cve_set
 
 
 @cli.command("epss-update")
@@ -62,37 +126,13 @@ def epss_update(
                 )
                 return
 
-            # Now fetch CVEs from scanpipe_discoveredpackage using these project IDs
-            cve_set = set()
-            total = len(project_uuids)
-            last_percent = -1
-
-            for idx, project_uuid in enumerate(project_uuids):
-                discovered = (
-                    session.query(DiscoveredPackage)
-                    .filter(DiscoveredPackage.project_id == project_uuid)
-                    .all()
-                )
-
-                for pkg in discovered:
-                    vulns = getattr(pkg, "affected_by_vulnerabilities", [])
-                    for vuln in vulns:
-                        try:
-                            aliases = vuln.get("aliases", [])
-                            cve_ids = [alias for alias in aliases if alias.startswith("CVE-")]
-
-                            for cve in cve_ids:
-                                cve_set.add(cve.upper())
-                        except (AttributeError, TypeError):
-                            logger.error(f"Error processing vulnerability data: {vuln}")
-
-                percent = int((idx + 1) * 100 / total)
-                if percent != last_percent and percent % 5 == 0:
-                    click.echo(
-                        f"Progress: {percent}% ({idx+1}/{total}) - Found {len(cve_set)} unique CVEs so far",
-                        nl=True,
-                    )
-                    last_percent = percent
+            # Now fetch CVEs from scanpipe_discoveredpackage (or the HTTP
+            # client, if LIBINV_SCIO_USE_HTTP is set) using these project IDs.
+            cve_set = _collect_cves_for_projects(
+                session=session,
+                project_uuids=project_uuids,
+                verbose=verbose,
+            )
 
             if not cve_set:
                 click.echo(
