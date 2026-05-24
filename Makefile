@@ -95,10 +95,14 @@ tests:
 	@echo "-> Running tests (doctests + unit tests)"
 	@${ACTIVATE}; coverage run -m pytest
 
+integration-tests:
+	@echo "-> Running integration tests (requires TEST_DATABASE_URL)"
+	@${ACTIVATE}; python -m pytest tests/integration -v
+
 
 install: virtualenv deps
 
 docs:
 	@${ACTIVATE}; cd docs; pip3 install sphinx_rtd_theme; make html
 
-.PHONY: docs tests coverage
+.PHONY: docs tests coverage integration-tests
