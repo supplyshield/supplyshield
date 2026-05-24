@@ -34,9 +34,11 @@ from libinv.models._legacy import *  # noqa: F401,F403
 # top-level namespace, not just be reachable via star-import (which
 # matters for ``unittest.mock.patch``'s attribute lookup).
 from libinv.models._legacy import DiscoveredPackage  # noqa: F401
-from libinv.models._legacy import Repository  # noqa: F401
+# Sprint 41.3: Repository lives in libinv/models/repository.py.
+from libinv.models.repository import Repository  # noqa: F401
 from libinv.models._legacy import is_blacklist  # noqa: F401
-from libinv.models._legacy import is_excluded_repo  # noqa: F401
+# Sprint 41.1: is_excluded_repo now lives in libinv/models/wasp.py.
+from libinv.models.wasp import is_excluded_repo  # noqa: F401
 from libinv.models._legacy import requests  # noqa: F401  re-exported for test mocks
 from libinv.models._legacy import session_scope  # noqa: F401
 
@@ -45,11 +47,13 @@ from libinv.models._legacy import session_scope  # noqa: F401
 from libinv.models._legacy import MAX_LENGTH_LICENSE  # noqa: F401
 from libinv.models._legacy import MAX_LENGTH_VULNERABILITY_DESCRIPTION  # noqa: F401
 from libinv.models._legacy import ORGSRE_ACCOUNT_ID  # noqa: F401
-from libinv.models._legacy import Account  # noqa: F401
-from libinv.models._legacy import Actionable  # noqa: F401
-from libinv.models._legacy import ActionablePackageAvailableVersion  # noqa: F401
+# Sprint 41.3: Account / DeploymentCheckpoint live in libinv/models/repository.py.
+from libinv.models.repository import Account  # noqa: F401
+# Sprint 41.2: Actionable-domain classes live in libinv/models/actionable.py.
+from libinv.models.actionable import Actionable  # noqa: F401
+from libinv.models.actionable import ActionablePackageAvailableVersion  # noqa: F401
 from libinv.models._legacy import ConflictingInfoError  # noqa: F401
-from libinv.models._legacy import DeploymentCheckpoint  # noqa: F401
+from libinv.models.repository import DeploymentCheckpoint  # noqa: F401
 # Sprint 40.3: EPSS-domain class lives in libinv/models/epss.py.
 from libinv.models.epss import EPSS  # noqa: F401
 # Sprint 39.2: Image-domain classes live in libinv/models/image.py.
@@ -59,21 +63,25 @@ from libinv.models.image import LatestImage  # noqa: F401
 from libinv.models.image import Layer  # noqa: F401
 # Sprint 40.1: Package-domain classes live in libinv/models/package.py.
 from libinv.models.package import License  # noqa: F401
-from libinv.models._legacy import MalformedCaterpillarMessage  # noqa: F401
+# Sprint 41.1: MalformedCaterpillarMessage canonical home is
+# ``libinv.exceptions``; was previously re-exported via ``_legacy``.
+from libinv.exceptions import MalformedCaterpillarMessage  # noqa: F401
 from libinv.models.package import Package  # noqa: F401
 from libinv.models.package import PackageLicenseAssociation  # noqa: F401
-from libinv.models._legacy import Repository_ActionablePackageAvailableVersion  # noqa: F401
+from libinv.models.actionable import Repository_ActionablePackageAvailableVersion  # noqa: F401
 from libinv.models._legacy import SastLobMetaData  # noqa: F401
 from libinv.models._legacy import SastResult  # noqa: F401
 from libinv.models._legacy import Secbug  # noqa: F401
 # Sprint 40.2: Vulnerability-domain classes live in libinv/models/vulnerability.py.
 from libinv.models.vulnerability import Vulnerability  # noqa: F401
 from libinv.models.vulnerability import VulnerabilityPackageAssociation  # noqa: F401
-from libinv.models._legacy import Wasp  # noqa: F401
+# Sprint 41.1: Wasp lives in libinv/models/wasp.py.
+from libinv.models.wasp import Wasp  # noqa: F401
 from libinv.models._legacy import filter_model_collection  # noqa: F401
 from libinv.models._legacy import get_base_image_of  # noqa: F401
 from libinv.models._legacy import get_or_create  # noqa: F401
 from libinv.models._legacy import get_or_update_entry  # noqa: F401
-from libinv.models._legacy import is_valid_raw_message  # noqa: F401
+# Sprint 41.1: is_valid_raw_message now lives in libinv/models/wasp.py.
+from libinv.models.wasp import is_valid_raw_message  # noqa: F401
 from libinv.models._legacy import sort_versions  # noqa: F401
 from libinv.models._legacy import update_safely  # noqa: F401

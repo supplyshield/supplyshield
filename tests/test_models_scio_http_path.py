@@ -52,7 +52,7 @@ def test_get_vulnerabilities_count_falls_back_on_http_error(caplog):
     with patch(
         "libinv.services.scancodeio_client.get_default_client",
         return_value=fake_client,
-    ), patch("libinv.models._legacy.DiscoveredPackage", None):
+    ), patch("libinv.models.actionable.DiscoveredPackage", None):
         result = ActionablePackageAvailableVersion._get_vulnerabilities_count(apav)
 
     assert result == 0

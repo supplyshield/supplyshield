@@ -264,7 +264,7 @@ def test_excluded_repo_returns_none_and_writes_nothing(
     msg = _baseline_message()
     # Stub the exclusion predicate to True so we don't have to mutate the
     # env var which is parsed at import time.
-    with patch("libinv.models._legacy.is_excluded_repo", return_value=True):
+    with patch("libinv.models.wasp.is_excluded_repo", return_value=True):
         with _new_session(engine) as s:
             result = Wasp.eat_caterpillar_message(msg, session=s)
             assert result is None
