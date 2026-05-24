@@ -89,6 +89,13 @@ IMAGE_SCAN_ENABLED = _parse_bool(os.getenv("IMAGE_SCAN_ENABLED"), default=False)
 # loading would otherwise break.
 LIBINV_STRICT_LAZY = _parse_bool(os.getenv("LIBINV_STRICT_LAZY"), default=False)
 
+# Sprint 46.3 — retention horizon (days) for EPSS rows. The
+# ``prune_stale_epss_rows`` helper deletes any ``EPSS`` row whose
+# ``epss_date`` is older than ``max(epss_date) - retention_days`` after
+# each ``EPSS.refresh_cves`` run, preventing the table from growing
+# unbounded as the EPSS feed appends new dated rows daily.
+LIBINV_EPSS_RETENTION_DAYS = int(os.getenv("LIBINV_EPSS_RETENTION_DAYS", "90"))
+
 JAVA_HOME = json.loads(os.getenv("JAVA_HOME", "{}"))
 BASE_IMAGE_JAVA_VERSION_MAPPING = json.loads(os.getenv("BASE_IMAGE_JAVA_VERSION_MAPPING", "{}"))
 

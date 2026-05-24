@@ -155,6 +155,29 @@ class EPSS(Base):
                         logger.error(f"Error fetching EPSS data: {e}")
                     failed += len(batch)
 
+        # Sprint 46.3 — keep the EPSS table bounded by pruning rows
+        # whose ``epss_date`` is older than the configured retention
+        # window. Defer the import + env-var read so test stubs that
+        # monkeypatch ``libinv.services.epss.prune`` or
+        # ``libinv.env.LIBINV_EPSS_RETENTION_DAYS`` are respected.
+        try:
+            from libinv.env import LIBINV_EPSS_RETENTION_DAYS
+            from libinv.services.epss.prune import prune_stale_epss_rows
+
+            deleted = prune_stale_epss_rows(
+                session, retention_days=LIBINV_EPSS_RETENTION_DAYS
+            )
+            if deleted and logger:
+                logger.warning(
+                    f"Pruned {deleted} stale EPSS rows older than "
+                    f"{LIBINV_EPSS_RETENTION_DAYS} days from max(epss_date)"
+                )
+        except Exception as e:  # noqa: BLE001
+            # Pruning is best-effort: never let it bubble up and mask
+            # a successful refresh.
+            if logger:
+                logger.error(f"EPSS row pruning failed: {e}")
+
         return {"updated": updated, "skipped": skipped, "failed": failed}
 
     @classmethod
