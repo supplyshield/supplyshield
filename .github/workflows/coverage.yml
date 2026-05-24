@@ -69,6 +69,21 @@ jobs:
           . venv/bin/activate
           pytest tests/integration -v
 
+      # Sprint 33.3 — `alembic check` is a required gate on PRs.
+      # Detects ORM / migration schema drift by running --autogenerate
+      # against the Postgres service container and failing non-zero if any
+      # operations would be produced.
+      - name: Check alembic schema drift
+        env:
+          DB_HOSTNAME: localhost
+          DB_USERNAME: postgres
+          DB_PASSWORD: postgres
+          DB_NAME: libinv_test
+        run: |
+          . venv/bin/activate
+          python -m alembic upgrade head
+          python -m alembic check
+
       - name: Generate coverage report
         run: |
           coverage report

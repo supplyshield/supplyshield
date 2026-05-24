@@ -22,6 +22,7 @@ from sqlalchemy import CHAR
 from sqlalchemy import JSON
 from sqlalchemy import Boolean
 from sqlalchemy import Column
+from sqlalchemy import Date
 from sqlalchemy import DateTime
 from sqlalchemy import Float
 from sqlalchemy import ForeignKey
@@ -96,6 +97,13 @@ class PackageLicenseAssociation(Base):
     package = relationship("Package", back_populates="licenses")
     license = relationship("License", back_populates="packages")
 
+    # Sprint 33.1/33.2: declare indexes already created by alembic 0002_fk_indexes
+    # so `alembic check` / autogenerate treats them as in-sync with the schema.
+    __table_args__ = (
+        Index("ix_package_license_association_license_id", "license_id"),
+        {"schema": "libinv"},
+    )
+
 
 @declarative_mixin
 class TimestampMixin:
@@ -114,7 +122,9 @@ class Image(Base, TimestampMixin):
     )
     digest = Column(String(72), nullable=False)
     tag = Column(String(128))
-    commit = Column(String(128))
+    # Sprint 34.3: git SHA-1 is 40 hex chars (SHA-256 is 64). String(128) was
+    # ~3x oversized; tightened to 40 to match git's canonical commit-hash length.
+    commit = Column(String(40))
     platform = Column(String(24), nullable=False)
     parent_image_id = Column(ForeignKey("libinv.images.id", onupdate="CASCADE", ondelete="CASCADE"))
     base_image_id = Column(ForeignKey("libinv.images.id", onupdate="CASCADE", ondelete="CASCADE"))
@@ -129,6 +139,16 @@ class Image(Base, TimestampMixin):
     layers = relationship("Layer", back_populates="image")
     repository = relationship("Repository", back_populates="images")
     wasp = relationship("Wasp", back_populates="images")
+
+    # Sprint 33.1/33.2: declare indexes already created by alembic 0002_fk_indexes
+    __table_args__ = (
+        Index("ix_images_account_id", "account_id"),
+        Index("ix_images_base_image_id", "base_image_id"),
+        Index("ix_images_parent_image_id", "parent_image_id"),
+        Index("ix_images_repository_id", "repository_id"),
+        Index("ix_images_wasp_id", "wasp_id"),
+        {"schema": "libinv"},
+    )
 
     def __str__(self):
         return f"{self.name}-{self.id}"
@@ -197,6 +217,12 @@ class ImagePackageAssociation(Base):
 
     Index("not-null-metadata", pkg_metadata, mysql_length=1)
 
+    # Sprint 33.1/33.2: declare indexes already created by alembic 0002_fk_indexes
+    __table_args__ = (
+        Index("ix_image_package_association_package_id", "package_id"),
+        {"schema": "libinv"},
+    )
+
 
 class VulnerabilityPackageAssociation(Base):
     __tablename__ = "vulnerability_package_association"
@@ -214,6 +240,12 @@ class VulnerabilityPackageAssociation(Base):
 
     vulnerability = relationship("Vulnerability", back_populates="packages")
     package = relationship("Package", back_populates="vulnerabilities")
+
+    # Sprint 33.1/33.2: declare indexes already created by alembic 0002_fk_indexes
+    __table_args__ = (
+        Index("ix_vulnerability_package_association_package_id", "package_id"),
+        {"schema": "libinv"},
+    )
 
 
 class Vulnerability(Base):
@@ -418,6 +450,12 @@ class LatestImage(Base):
         ForeignKey("libinv.accounts.id", onupdate="CASCADE", ondelete="CASCADE"), primary_key=True
     )  # This helps to speed up joins with account table
 
+    # Sprint 33.1/33.2: declare indexes already created by alembic 0002_fk_indexes
+    __table_args__ = (
+        Index("ix_latest_images_account_id", "account_id"),
+        {"schema": "libinv"},
+    )
+
     @classmethod
     def calibrate(cls, session, checkpoint):
         """
@@ -478,6 +516,12 @@ class Secbug(Base, TimestampMixin):
     repository = relationship("Repository", back_populates="secbugs")
     key = synonym("id")
 
+    # Sprint 33.1/33.2: declare indexes already created by alembic 0002_fk_indexes
+    __table_args__ = (
+        Index("ix_secbugs_repository_id", "repository_id"),
+        {"schema": "libinv"},
+    )
+
     def __str__(self):
         return self.id
 
@@ -518,7 +562,8 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
     uuid = Column(String(36), nullable=False, unique=True, default=uuid4)
     repository_id = Column(ForeignKey("libinv.repositories.id", onupdate="CASCADE"))
     tag = Column(String(128))
-    commit = Column(String(128))
+    # Sprint 34.3: git SHA-1 is 40 hex chars; tightened from String(128).
+    commit = Column(String(40))
     environment = Column(String(128))
     jenkins_url = Column(String(256))
     raw_message = Column(String(2048), nullable=False)
@@ -534,6 +579,12 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
     )
     actionable_versions = relationship(
         "Repository_ActionablePackageAvailableVersion", back_populates="wasp", overlaps="actionable"
+    )
+
+    # Sprint 33.1/33.2: declare indexes already created by alembic 0002_fk_indexes
+    __table_args__ = (
+        Index("ix_wasps_repository_id", "repository_id"),
+        {"schema": "libinv"},
     )
 
     def __enter__(self):
@@ -754,6 +805,13 @@ class SastResult(Base, TimestampMixin):
     validate_date = Column(DateTime)
     secbug_created_date = Column(DateTime)
     mean_solve_time = Column(Integer)
+
+    # Sprint 33.1/33.2: declare indexes already created by alembic 0002_fk_indexes
+    __table_args__ = (
+        Index("ix_sast_result_lob_id", "lob_id"),
+        Index("ix_sast_result_wasp_id", "wasp_id"),
+        {"schema": "libinv"},
+    )
 
 
 # https://stackoverflow.com/a/2587041/2251364
@@ -1178,6 +1236,8 @@ class ActionablePackageAvailableVersion(Base):
 
     __table_args__ = (
         UniqueConstraint("package_url", "version", name="uq_package_version"),
+        # Sprint 33.1/33.2: declare indexes already created by alembic 0002_fk_indexes
+        Index("ix_actionable_pkg_available_versions_actionable_id", "actionable_id"),
         {"schema": "libinv"},
     )
 
@@ -1485,7 +1545,28 @@ class Repository_ActionablePackageAvailableVersion(Base):
     )
     repository = relationship("Repository", back_populates="actionable_versions")
 
-    __table_args__ = ({"schema": "libinv"},)
+    __table_args__ = (
+        # Sprint 33.1/33.2: declare indexes already created by alembic 0002_fk_indexes
+        Index(
+            "ix_repo_actionable_pkg_versions_assoc_pkg_version_id",
+            "actionable_package_version_id",
+        ),
+        Index(
+            "ix_repo_actionable_pkg_versions_assoc_repository_id",
+            "repository_id",
+        ),
+        Index(
+            "ix_repo_actionable_pkg_versions_assoc_wasp_uuid",
+            "wasp_uuid",
+        ),
+        # Composite index for hot query path.
+        Index(
+            "ix_repo_actionable_pkg_versions_repo_env",
+            "repository_id",
+            "environment",
+        ),
+        {"schema": "libinv"},
+    )
 
 
 def get_or_update_entry(session, model, query_filter, **kwargs):
@@ -1629,8 +1710,19 @@ class EPSS(Base):
     cve = Column(String(50), primary_key=True, nullable=False)
     epss_score = Column(Float(precision=6), nullable=False)
     epss_percentile = Column(Float(precision=6), nullable=False)
-    epss_date = Column(String(20), nullable=True)
+    # Sprint 34.2: epss_date promoted from String(20) to native DATE for
+    # proper ordering / range queries. Migration 0003 ALTERs the column with
+    # ``USING epss_date::date`` so existing 'YYYY-MM-DD' string rows convert
+    # losslessly. Callers should pass either a ``datetime.date`` or an
+    # ISO-8601 'YYYY-MM-DD' string — psycopg2 parses both.
+    epss_date = Column(Date, nullable=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+    # Sprint 33.1/33.2: declare composite index already created by alembic 0002_fk_indexes
+    __table_args__ = (
+        Index("ix_epss_cve_updated_at", "cve", "updated_at"),
+        {"schema": "libinv"},
+    )
 
     def __str__(self):
         return f"{self.cve} - {self.epss_score}"

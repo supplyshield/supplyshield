@@ -30,7 +30,8 @@ from sqlalchemy import inspect, text
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 # Sprint 2's head revision — bump this when a new migration lands.
-HEAD_REVISION = "0002_fk_indexes"
+# Sprint 34.2 + 34.3 added 0003 (epss_date -> Date) and 0004 (String(N) tightening).
+HEAD_REVISION = "0004_string_n_tightening"
 
 
 def _db_env_from_url(url: str) -> dict:

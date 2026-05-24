@@ -5,7 +5,13 @@ Verifies `EPSS.update_epss_scores` against a real Postgres:
   - subsequent calls with the same CVE upsert (overwrite) rather than dup
   - empty input is a no-op
   - `EPSS.get_fresh_cves` only returns rows newer than the staleness window
+
+Sprint 34.2: ``epss_date`` is a native ``DATE`` column (was ``String(20)``);
+production callers pass ISO-8601 strings (the EPSS API format), which Postgres
+implicitly casts on insert. After read, SQLAlchemy returns a ``datetime.date``
+object — so assertions use ``date.fromisoformat(...)``.
 """
+from datetime import date
 from datetime import datetime
 from datetime import timedelta
 from datetime import timezone
@@ -51,7 +57,9 @@ def test_update_epss_scores_fresh_insert(db_session):
         assert r.updated_at is not None
         assert r.epss_score == payload[r.cve]["epss_score"]
         assert r.epss_percentile == payload[r.cve]["epss_percentile"]
-        assert r.epss_date == payload[r.cve]["epss_date"]
+        # Sprint 34.2: epss_date is now a DATE column; Postgres casts the
+        # ISO string on insert, SQLAlchemy returns a datetime.date.
+        assert r.epss_date == date.fromisoformat(payload[r.cve]["epss_date"])
 
 
 def test_update_epss_scores_upsert_overwrites_existing(db_session):
@@ -80,7 +88,7 @@ def test_update_epss_scores_upsert_overwrites_existing(db_session):
     after = rows[0]
     assert after.epss_score == 0.99
     assert after.epss_percentile == 0.95
-    assert after.epss_date == "2024-02-02"
+    assert after.epss_date == date(2024, 2, 2)
     # updated_at should advance (the upsert sets a fresh `now`).
     assert after.updated_at >= first_updated_at
 
@@ -123,7 +131,7 @@ def test_get_fresh_cves_filters_by_age(db_session):
             cve=stale_cve,
             epss_score=0.33,
             epss_percentile=0.44,
-            epss_date="2024-01-01",
+            epss_date=date(2024, 1, 1),
             updated_at=stale_dt,
         )
     )

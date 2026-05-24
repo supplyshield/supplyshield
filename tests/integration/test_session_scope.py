@@ -13,6 +13,8 @@ via the engine pool independently of any pre-existing connection.
 Cleanup is explicit: each test inserts a row tagged with a unique sentinel
 CVE id and deletes it on teardown, so no test residue leaks.
 """
+from datetime import date
+
 import pytest
 
 
@@ -67,7 +69,7 @@ def test_session_scope_commits_on_clean_exit(engine, cleanup_epss):
                 cve=cve,
                 epss_score=0.42,
                 epss_percentile=0.50,
-                epss_date="2024-04-01",
+                epss_date=date(2024, 4, 1),
             )
         )
         # No exception — commit happens at scope exit.
@@ -99,7 +101,7 @@ def test_session_scope_rolls_back_on_exception(engine, cleanup_epss):
                     cve=cve,
                     epss_score=0.99,
                     epss_percentile=0.99,
-                    epss_date="2024-04-02",
+                    epss_date=date(2024, 4, 2),
                 )
             )
             s.flush()  # send to the DB, but still inside the transaction
