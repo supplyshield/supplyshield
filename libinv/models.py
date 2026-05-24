@@ -474,7 +474,8 @@ class Secbug(Base, TimestampMixin):
         self.deleted_at = datetime.now(tz=timezone.utc)
 
     def is_active(self):
-        return True if self.deleted_at else False
+        """Return True if the secbug is not soft-deleted."""
+        return self.deleted_at is None
 
     @classmethod
     def get(cls, id: str, session=None):

@@ -16,9 +16,14 @@ from libinv.api.actionable import actionable
 def _compute_statistics(session):
     """Run the aggregate queries that power /v3/statistics.
 
-    Executes the 14 serial aggregate queries against the supplied session
-    and assembles them into the nested ``statistics`` dict consumed by
-    ``statistics.html``. The caller owns the session/transaction lifecycle
+    Executes 6 aggregate queries against the supplied session and assembles
+    them into the nested ``statistics`` dict consumed by ``statistics.html``.
+    Sprints 7-8 consolidated the original 14 serial scalar() queries into
+    just two filter-aggregate statements (one for package buckets, one for
+    repository buckets), with the remaining four queries already efficient:
+    the ``package_stats`` first-row aggregate, ``total_repositories``, the
+    ``env_stats`` GROUP BY, the ``pod_stats`` GROUP BY, and the
+    ``org_stats`` GROUP BY. The caller owns the session/transaction lifecycle
     (this helper does NOT open or close a session, nor set timeouts).
 
     Returned dict shape (all counts are non-negative ints; percentages and
@@ -129,8 +134,59 @@ def _compute_statistics(session):
     # Get repository statistics
     total_repositories = session.query(func.count(distinct(Repository.id))).scalar() or 0
 
-    repositories_with_vulns = (
-        session.query(func.count(distinct(Repository.id)))
+    # Calculate repository vulnerability + EPSS priority distributions in a
+    # single statement. The JOIN happens once; the per-bucket
+    # ``COUNT(DISTINCT Repository.id) FILTER (WHERE ...)`` aggregates
+    # partition the joined rows the same way the 6 serial queries did.
+    repo_bucket_row = (
+        session.query(
+            func.count(distinct(Repository.id))
+            .filter(ActionablePackageAvailableVersion.vulns_count > 0)
+            .label("with_vulns"),
+            func.count(distinct(Repository.id))
+            .filter(
+                and_(
+                    ActionablePackageAvailableVersion.epss_score > 0.8,
+                    ActionablePackageAvailableVersion.vulns_count > 0,
+                )
+            )
+            .label("repo_p0"),
+            func.count(distinct(Repository.id))
+            .filter(
+                and_(
+                    ActionablePackageAvailableVersion.epss_score > 0.7,
+                    ActionablePackageAvailableVersion.epss_score <= 0.8,
+                    ActionablePackageAvailableVersion.vulns_count > 0,
+                )
+            )
+            .label("repo_p1"),
+            func.count(distinct(Repository.id))
+            .filter(
+                and_(
+                    ActionablePackageAvailableVersion.epss_score > 0.5,
+                    ActionablePackageAvailableVersion.epss_score <= 0.7,
+                    ActionablePackageAvailableVersion.vulns_count > 0,
+                )
+            )
+            .label("repo_p2"),
+            func.count(distinct(Repository.id))
+            .filter(
+                and_(
+                    ActionablePackageAvailableVersion.epss_score <= 0.5,
+                    ActionablePackageAvailableVersion.epss_score.isnot(None),
+                    ActionablePackageAvailableVersion.vulns_count > 0,
+                )
+            )
+            .label("repo_p3"),
+            func.count(distinct(Repository.id))
+            .filter(
+                and_(
+                    ActionablePackageAvailableVersion.epss_score.is_(None),
+                    ActionablePackageAvailableVersion.vulns_count > 0,
+                )
+            )
+            .label("repo_no_epss"),
+        )
         .join(
             Repository_ActionablePackageAvailableVersion,
             Repository.id == Repository_ActionablePackageAvailableVersion.repository_id,
@@ -140,121 +196,17 @@ def _compute_statistics(session):
             Repository_ActionablePackageAvailableVersion.actionable_package_version_id
             == ActionablePackageAvailableVersion.uuid,
         )
-        .filter(ActionablePackageAvailableVersion.vulns_count > 0)
-        .scalar()
-        or 0
+        .one()
     )
+
+    repositories_with_vulns = repo_bucket_row.with_vulns or 0
+    repo_p0_count = repo_bucket_row.repo_p0 or 0
+    repo_p1_count = repo_bucket_row.repo_p1 or 0
+    repo_p2_count = repo_bucket_row.repo_p2 or 0
+    repo_p3_count = repo_bucket_row.repo_p3 or 0
+    repo_no_epss_count = repo_bucket_row.repo_no_epss or 0
 
     repositories_without_vulns = total_repositories - repositories_with_vulns
-
-    # Calculate repository priority distributions
-    repo_p0_count = (
-        session.query(func.count(distinct(Repository.id)))
-        .join(
-            Repository_ActionablePackageAvailableVersion,
-            Repository.id == Repository_ActionablePackageAvailableVersion.repository_id,
-        )
-        .join(
-            ActionablePackageAvailableVersion,
-            Repository_ActionablePackageAvailableVersion.actionable_package_version_id
-            == ActionablePackageAvailableVersion.uuid,
-        )
-        .filter(
-            and_(
-                ActionablePackageAvailableVersion.epss_score > 0.8,
-                ActionablePackageAvailableVersion.vulns_count > 0,
-            )
-        )
-        .scalar()
-        or 0
-    )
-
-    repo_p1_count = (
-        session.query(func.count(distinct(Repository.id)))
-        .join(
-            Repository_ActionablePackageAvailableVersion,
-            Repository.id == Repository_ActionablePackageAvailableVersion.repository_id,
-        )
-        .join(
-            ActionablePackageAvailableVersion,
-            Repository_ActionablePackageAvailableVersion.actionable_package_version_id
-            == ActionablePackageAvailableVersion.uuid,
-        )
-        .filter(
-            and_(
-                ActionablePackageAvailableVersion.epss_score > 0.7,
-                ActionablePackageAvailableVersion.epss_score <= 0.8,
-                ActionablePackageAvailableVersion.vulns_count > 0,
-            )
-        )
-        .scalar()
-        or 0
-    )
-
-    repo_p2_count = (
-        session.query(func.count(distinct(Repository.id)))
-        .join(
-            Repository_ActionablePackageAvailableVersion,
-            Repository.id == Repository_ActionablePackageAvailableVersion.repository_id,
-        )
-        .join(
-            ActionablePackageAvailableVersion,
-            Repository_ActionablePackageAvailableVersion.actionable_package_version_id
-            == ActionablePackageAvailableVersion.uuid,
-        )
-        .filter(
-            and_(
-                ActionablePackageAvailableVersion.epss_score > 0.5,
-                ActionablePackageAvailableVersion.epss_score <= 0.7,
-                ActionablePackageAvailableVersion.vulns_count > 0,
-            )
-        )
-        .scalar()
-        or 0
-    )
-
-    repo_p3_count = (
-        session.query(func.count(distinct(Repository.id)))
-        .join(
-            Repository_ActionablePackageAvailableVersion,
-            Repository.id == Repository_ActionablePackageAvailableVersion.repository_id,
-        )
-        .join(
-            ActionablePackageAvailableVersion,
-            Repository_ActionablePackageAvailableVersion.actionable_package_version_id
-            == ActionablePackageAvailableVersion.uuid,
-        )
-        .filter(
-            and_(
-                ActionablePackageAvailableVersion.epss_score <= 0.5,
-                ActionablePackageAvailableVersion.epss_score.isnot(None),
-                ActionablePackageAvailableVersion.vulns_count > 0,
-            )
-        )
-        .scalar()
-        or 0
-    )
-
-    repo_no_epss_count = (
-        session.query(func.count(distinct(Repository.id)))
-        .join(
-            Repository_ActionablePackageAvailableVersion,
-            Repository.id == Repository_ActionablePackageAvailableVersion.repository_id,
-        )
-        .join(
-            ActionablePackageAvailableVersion,
-            Repository_ActionablePackageAvailableVersion.actionable_package_version_id
-            == ActionablePackageAvailableVersion.uuid,
-        )
-        .filter(
-            and_(
-                ActionablePackageAvailableVersion.epss_score.is_(None),
-                ActionablePackageAvailableVersion.vulns_count > 0,
-            )
-        )
-        .scalar()
-        or 0
-    )
 
     # Get environment statistics
     env_stats = (
@@ -426,10 +378,14 @@ def statistics_dashboard():
             statistics = _compute_statistics(session)
             return render_template("statistics.html", statistics=statistics)
 
-    except Exception as e:
-        logger.error(f"Error loading statistics dashboard: {str(e)}")
-        # Return a simple error page or redirect to a safe page
-        return render_template(
+    except Exception:
+        # Log full stack trace server-side; never leak str(e) to the user
+        # (a stringified DB error can disclose schema details or credentials).
+        logger.exception("statistics_dashboard failed")
+        # Preserve the rendered-template UX (the dashboard still displays
+        # a friendly error banner via the "error" key) but signal failure
+        # with HTTP 500 so callers / monitoring see it as a real error.
+        rendered = render_template(
             "statistics.html",
             statistics={
                 "package_stats": {"total_packages": 0, "vulnerable_packages": 0},
@@ -438,6 +394,7 @@ def statistics_dashboard():
                 "environment_stats": [],
                 "pod_stats": [],
                 "organization_stats": [],
-                "error": "Unable to load statistics due to high load. Please try again later.",
+                "error": "An error occurred. Check server logs.",
             },
         )
+        return rendered, 500

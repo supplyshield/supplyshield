@@ -9,10 +9,13 @@ silently dropping or renaming keys the Jinja template relies on.
 
 The bucket-count tests (``test_compute_statistics_p{0,1,2,3}_count_specific_value``
 and ``test_compute_statistics_total_packages``) lock in the specific count
-values produced by ``_compute_statistics`` for a known seed. Sprint 7 merges
-the four serial P0/P1/P2/P3 queries into a single ``COUNT(*) FILTER (...)``
-aggregate; these assertions catch regressions in that rewrite. Sprint 8 will
-consolidate the remaining 10 of the 14 queries.
+values produced by ``_compute_statistics`` for a known seed. Sprint 7 merged
+the four serial P0/P1/P2/P3 package queries into a single
+``COUNT(*) FILTER (...)`` aggregate; Sprint 8 merged the six serial
+repository queries (with_vulns + p0/p1/p2/p3/no_epss) into a single
+``COUNT(DISTINCT Repository.id) FILTER (...)`` aggregate. The
+``test_compute_statistics_repo_*`` and ``test_compute_statistics_{env,pod}_stats_*``
+families lock in the post-consolidation behavior.
 
 Skipped at collection when TEST_DATABASE_URL is unset (see
 tests/integration/conftest.py: collect_ignore_glob).
@@ -358,3 +361,217 @@ def test_compute_statistics_total_packages(db_session, seeded_buckets):
         + stats["package_stats"]["no_epss_packages"]
     )
     assert bucket_sum == seeded_buckets["total"]
+
+
+# ---------------------------------------------------------------------------
+# Repository-stats regression tests (Sprint 8)
+#
+# Sprint 8 consolidated the 5 serial repo bucket queries
+# (repo_p0/p1/p2/p3/no_epss_count) AND the repositories_with_vulns query into
+# a SINGLE filter-aggregate. These tests seed N repos with distinct severity
+# profiles and lock in the per-bucket REPOSITORY counts (not package counts).
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="function")
+def seeded_repo_buckets(db_session):
+    """Seed 2 repos, each owning exactly one package in a distinct EPSS bucket.
+
+    Layout:
+        repo_high_priority  → 1 P0 package (epss_score=0.9, vulns_count=2)
+        repo_low_priority   → 1 P3 package (epss_score=0.3, vulns_count=2)
+
+    Returns the expected repository_stats counts dict for the assertion side
+    to consume. The structure mirrors ``seeded_buckets`` but at the repo
+    granularity instead of the package granularity.
+    """
+    from libinv.models import Actionable
+    from libinv.models import Repository
+
+    repo_high = Repository(
+        name="repo-high-priority",
+        org="test-org",
+        provider="github.com",
+        is_public=False,
+        pod="prio-pod",
+    )
+    repo_low = Repository(
+        name="repo-low-priority",
+        org="test-org",
+        provider="github.com",
+        is_public=False,
+        pod="prio-pod",
+    )
+    db_session.add_all([repo_high, repo_low])
+    db_session.flush()
+
+    actionable = Actionable(package_url="pkg:pypi/repo-bucket-pkg")
+    db_session.add(actionable)
+    db_session.flush()
+
+    # repo_high gets one P0-bucket package version.
+    _seed_package_version(
+        db_session,
+        repo=repo_high,
+        actionable=actionable,
+        epss_score=0.9,
+        vulns_count=2,
+        version="1.0.0",
+    )
+    # repo_low gets one P3-bucket package version (epss <= 0.5, not null).
+    _seed_package_version(
+        db_session,
+        repo=repo_low,
+        actionable=actionable,
+        epss_score=0.3,
+        vulns_count=2,
+        version="1.0.1",
+    )
+
+    return {
+        "repo_p0_expected": 1,
+        "repo_p1_expected": 0,
+        "repo_p2_expected": 0,
+        "repo_p3_expected": 1,
+        "repo_no_epss_expected": 0,
+        "with_vulns_expected": 2,
+        "total_repositories_expected": 2,
+    }
+
+
+def test_compute_statistics_repo_p0_count(db_session, seeded_repo_buckets):
+    """A repo with at least one P0 package counts as 1 P0 repository."""
+    from libinv.api.actionable.statistics import _compute_statistics
+
+    stats = _compute_statistics(db_session)
+    assert (
+        stats["repository_stats"]["p0_repositories"]
+        == seeded_repo_buckets["repo_p0_expected"]
+    )
+
+
+def test_compute_statistics_repo_p3_count(db_session, seeded_repo_buckets):
+    """A repo with at least one P3 package counts as 1 P3 repository."""
+    from libinv.api.actionable.statistics import _compute_statistics
+
+    stats = _compute_statistics(db_session)
+    assert (
+        stats["repository_stats"]["p3_repositories"]
+        == seeded_repo_buckets["repo_p3_expected"]
+    )
+
+
+def test_compute_statistics_repo_bucket_partition(db_session, seeded_repo_buckets):
+    """Both seeded repos show up in repositories_with_vulnerabilities and total counts.
+
+    Locks in the consolidated repo query: the with_vulns aggregate counts
+    distinct repos with ANY vulnerable package, while the per-bucket aggregates
+    count distinct repos in each EPSS slice. A repo with one P0 and one P3
+    would appear in BOTH p0_repositories and p3_repositories — they're not
+    a strict partition, so we don't assert sum-equals-with-vulns here.
+    """
+    from libinv.api.actionable.statistics import _compute_statistics
+
+    stats = _compute_statistics(db_session)
+    assert (
+        stats["repository_stats"]["repositories_with_vulnerabilities"]
+        == seeded_repo_buckets["with_vulns_expected"]
+    )
+    # Both seeded repos must be visible in total_repositories. Other tests
+    # may seed additional repos at the module scope, so use >=.
+    assert (
+        stats["repository_stats"]["total_repositories"]
+        >= seeded_repo_buckets["total_repositories_expected"]
+    )
+    # Sanity: with both seeded repos having vulns, repositories_without
+    # equals total_repositories - 2.
+    assert (
+        stats["repository_stats"]["repositories_without_vulnerabilities"]
+        == stats["repository_stats"]["total_repositories"]
+        - stats["repository_stats"]["repositories_with_vulnerabilities"]
+    )
+
+
+def test_compute_statistics_repo_p1_p2_empty_buckets(db_session, seeded_repo_buckets):
+    """Repo buckets that nothing was seeded into stay at 0.
+
+    Exercises the empty-bucket leg of the consolidated FILTER aggregate — a
+    bucket with no matching joined row must return 0, not NULL or a copy of
+    a neighboring bucket's count (the kind of bug a hand-rolled CTE could hit).
+    """
+    from libinv.api.actionable.statistics import _compute_statistics
+
+    stats = _compute_statistics(db_session)
+    assert stats["repository_stats"]["p1_repositories"] == 0
+    assert stats["repository_stats"]["p2_repositories"] == 0
+    assert stats["repository_stats"]["no_epss_repositories"] == 0
+
+
+# ---------------------------------------------------------------------------
+# Environment & pod stats regression tests (Sprint 8)
+#
+# env_stats and pod_stats were already efficient (single GROUP BY queries)
+# and were left unchanged by Sprint 8 consolidation. These tests verify
+# the existing single-query shape still produces correct output after the
+# surrounding query rewrites.
+# ---------------------------------------------------------------------------
+
+
+def test_compute_statistics_env_stats_groups_by_environment(db_session, seeded_buckets):
+    """env_stats has one row per environment seeded by _seed_package_version.
+
+    ``_seed_package_version`` hard-codes environment="stage" on every join row,
+    so the seeded buckets must surface as a single "stage" entry in env_stats.
+    Locks in the shape (list of dicts with environment / repository_count /
+    package_count keys) the template iterates over.
+    """
+    from libinv.api.actionable.statistics import _compute_statistics
+
+    stats = _compute_statistics(db_session)
+    env_rows = stats["environment_stats"]
+    assert isinstance(env_rows, list)
+    assert len(env_rows) >= 1
+    stage = next((row for row in env_rows if row["environment"] == "stage"), None)
+    assert stage is not None, f"expected env 'stage' in env_stats; got {env_rows}"
+    # Shape: every row has these keys.
+    assert set(stage.keys()) == {"environment", "repository_count", "package_count"}
+    # The seeded_buckets fixture creates one repo and (2+3+4+5+1)=15 packages,
+    # all linked to the same "stage" environment.
+    assert stage["repository_count"] >= 1
+    assert stage["package_count"] >= seeded_buckets["total"]
+
+
+def test_compute_statistics_pod_stats_groups_by_pod(db_session, seeded_buckets):
+    """pod_stats has one row per Repository.pod with bucketed vuln counts.
+
+    The seeded_buckets fixture sets pod="test-pod" on its repo, so the
+    seeded counts must surface under that pod. Verifies the GROUP BY query
+    in pod_stats_query still partitions counts by pod after the surrounding
+    consolidation, and that the per-bucket FILTER aggregates inside that
+    query return the same numbers the package-level fixture set up.
+    """
+    from libinv.api.actionable.statistics import _compute_statistics
+
+    stats = _compute_statistics(db_session)
+    pods = stats["pod_stats"]
+    assert isinstance(pods, list)
+    test_pod = next((row for row in pods if row["pod"] == "test-pod"), None)
+    assert test_pod is not None, f"expected pod 'test-pod' in pod_stats; got {pods}"
+    # Shape: every row has these keys.
+    assert set(test_pod.keys()) == {
+        "pod",
+        "vulnerable_packages",
+        "p0",
+        "p1",
+        "p2",
+        "p3",
+    }
+    # The seeded_buckets fixture puts known counts into each bucket — pod_stats
+    # uses COUNT(DISTINCT package), and all seeded rows have distinct uuids, so
+    # the pod row's per-bucket counts equal the package-level seeded counts.
+    assert test_pod["p0"] == seeded_buckets["p0"]
+    assert test_pod["p1"] == seeded_buckets["p1"]
+    assert test_pod["p2"] == seeded_buckets["p2"]
+    assert test_pod["p3"] == seeded_buckets["p3"]
+    # vulnerable_packages = total packages with vulns_count > 0 (all seeded).
+    assert test_pod["vulnerable_packages"] == seeded_buckets["total"]
