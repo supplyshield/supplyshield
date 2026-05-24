@@ -94,8 +94,13 @@ class PackageLicenseAssociation(Base):
         primary_key=True,
     )
 
-    package = relationship("Package", back_populates="licenses")
-    license = relationship("License", back_populates="packages")
+    # Sprint 37.2: lazy= audit.
+    # - package: never traversed via association.package in api/cli/scanners.
+    # - license: never traversed via association.license in api/cli/scanners (the
+    #   sbom.py selectinload chain stops at Package.licenses; License rows are
+    #   created/queried directly without back-traversal).
+    package = relationship("Package", back_populates="licenses", lazy="raise_on_sql")
+    license = relationship("License", back_populates="packages", lazy="raise_on_sql")
 
     # Sprint 33.1/33.2: declare indexes already created by alembic 0002_fk_indexes
     # so `alembic check` / autogenerate treats them as in-sync with the schema.
@@ -153,12 +158,27 @@ class Image(Base, TimestampMixin):
         ForeignKey("libinv.wasps.id", onupdate="CASCADE", ondelete="CASCADE"), nullable=True
     )
 
-    parent_image = relationship("Image", remote_side=[id], foreign_keys=[parent_image_id])
-    base_image = relationship("Image", remote_side=[id], foreign_keys=[base_image_id])
-    packages = relationship("ImagePackageAssociation", back_populates="image")
-    layers = relationship("Layer", back_populates="image")
-    repository = relationship("Repository", back_populates="images")
-    wasp = relationship("Wasp", back_populates="images")
+    # Sprint 37.2: lazy= audit (paired with LIBINV_STRICT_LAZY flag in Sprint 37.1).
+    # - parent_image: traversed by get_base_image_of() walking up chain. lazy="select" required.
+    # - base_image: only the FK is read directly (image.base_image_id); the relationship
+    #   itself is never traversed in api/cli/scanners. Safe for raise_on_sql.
+    # - packages: traversed in image_scanner/sca.py (with selectinload), image_scanner/sbom.py
+    #   (with selectinload), and cli/query.py. Keep default select.
+    # - layers: traversed by sorted_layers (called from base_image.py) and join in
+    #   detect_and_update_base_image. Keep default select.
+    # - repository: never traversed via image.repository in api/cli/scanners. Safe for raise.
+    # - wasp: only assigned (image.wasp = wasp in bridge.py); never traversed for reads.
+    #   Safe for raise_on_sql.
+    parent_image = relationship(
+        "Image", remote_side=[id], foreign_keys=[parent_image_id], lazy="select"
+    )
+    base_image = relationship(
+        "Image", remote_side=[id], foreign_keys=[base_image_id], lazy="raise_on_sql"
+    )
+    packages = relationship("ImagePackageAssociation", back_populates="image", lazy="select")
+    layers = relationship("Layer", back_populates="image", lazy="select")
+    repository = relationship("Repository", back_populates="images", lazy="raise_on_sql")
+    wasp = relationship("Wasp", back_populates="images", lazy="raise_on_sql")
 
     # Sprint 33.1/33.2: declare indexes already created by alembic 0002_fk_indexes
     __table_args__ = (
@@ -221,9 +241,19 @@ class Package(Base):
         onupdate=func.current_timestamp(),
         nullable=False,
     )
-    images = relationship("ImagePackageAssociation", back_populates="package")
-    licenses = relationship("PackageLicenseAssociation", back_populates="package")
-    vulnerabilities = relationship("VulnerabilityPackageAssociation", back_populates="package")
+    # Sprint 37.2: lazy= audit.
+    # - images: never traversed in api/cli/scanners (back-ref from Package side).
+    # - licenses: traversed in image_scanner/sbom.py (with selectinload Image.packages
+    #   ... Package.licenses cascade) and sbom.py:138 (package.licenses.append). Keep select.
+    # - vulnerabilities: traversed in image_scanner/sca.py via
+    #   selectinload(Package.vulnerabilities). Keep select.
+    images = relationship(
+        "ImagePackageAssociation", back_populates="package", lazy="raise_on_sql"
+    )
+    licenses = relationship("PackageLicenseAssociation", back_populates="package", lazy="select")
+    vulnerabilities = relationship(
+        "VulnerabilityPackageAssociation", back_populates="package", lazy="select"
+    )
 
     def __str__(self):
         return self.purl
@@ -241,8 +271,12 @@ class ImagePackageAssociation(Base):
     # Sprint 34.1: optional free-form metadata blob.
     pkg_metadata = Column("metadata", Text, nullable=True)
 
-    image = relationship("Image", back_populates="packages")
-    package = relationship("Package", back_populates="images")
+    # Sprint 37.2: lazy= audit.
+    # - image: never traversed via association.image in api/cli/scanners.
+    # - package: traversed in image_scanner/sca.py + sbom.py via
+    #   selectinload(...ImagePackageAssociation.package). Keep select.
+    image = relationship("Image", back_populates="packages", lazy="raise_on_sql")
+    package = relationship("Package", back_populates="images", lazy="select")
 
     Index("not-null-metadata", pkg_metadata, mysql_length=1)
 
@@ -267,8 +301,12 @@ class VulnerabilityPackageAssociation(Base):
     )
     fix = Column(String(100), doc="comma seperated list of fix versions", nullable=True)
 
-    vulnerability = relationship("Vulnerability", back_populates="packages")
-    package = relationship("Package", back_populates="vulnerabilities")
+    # Sprint 37.2: lazy= audit.
+    # - vulnerability: traversed in image_scanner/sca.py via
+    #   selectinload(...VulnerabilityPackageAssociation.vulnerability). Keep select.
+    # - package: back-ref never traversed in api/cli/scanners.
+    vulnerability = relationship("Vulnerability", back_populates="packages", lazy="select")
+    package = relationship("Package", back_populates="vulnerabilities", lazy="raise_on_sql")
 
     # Sprint 33.1/33.2: declare indexes already created by alembic 0002_fk_indexes
     __table_args__ = (
@@ -296,7 +334,11 @@ class Vulnerability(Base):
     nvd_cvss_impact_score = Column(
         "nvd-cvss.impact_score", Float(precision=3), nullable=True
     )
-    packages = relationship("VulnerabilityPackageAssociation", back_populates="vulnerability")
+    # Sprint 37.2: back-ref never traversed in api/cli/scanners (only the forward
+    # VulnerabilityPackageAssociation.vulnerability direction is read).
+    packages = relationship(
+        "VulnerabilityPackageAssociation", back_populates="vulnerability", lazy="raise_on_sql"
+    )
 
     def set_description(self, desc: str):
         if desc:
@@ -312,7 +354,11 @@ class License(Base):
     id = Column(Integer, primary_key=True)
     # Sprint 34.1: license name is the semantic key (unique) — required.
     name = Column(String(MAX_LENGTH_LICENSE), unique=True, nullable=False)
-    packages = relationship("PackageLicenseAssociation", back_populates="license")
+    # Sprint 37.2: back-ref never traversed in api/cli/scanners (only the forward
+    # Package.licenses direction is read in sbom.py).
+    packages = relationship(
+        "PackageLicenseAssociation", back_populates="license", lazy="raise_on_sql"
+    )
 
     def set_license_name(self, name):
         if name:
@@ -326,7 +372,8 @@ class Layer(Base, TimestampMixin):
         ForeignKey("libinv.images.id", onupdate="CASCADE", ondelete="CASCADE"), primary_key=True
     )
     seq = Column(Integer, primary_key=True, nullable=False)
-    image = relationship("Image", back_populates="layers")
+    # Sprint 37.2: back-ref never traversed via layer.image; only Image.layers is read.
+    image = relationship("Image", back_populates="layers", lazy="raise_on_sql")
 
     def __eq__(self, other):
         return self.id == other.id and self.seq == other.seq
@@ -342,14 +389,19 @@ class Repository(Base):
     org = Column(String(200), nullable=False)
     name = Column(String(200), nullable=False)
     is_public = Column(Boolean, default=False, nullable=False)
-    images = relationship("Image", back_populates="repository")
-    secbugs = relationship("Secbug", back_populates="repository")
+    # Sprint 37.2: lazy= audit. All three back-refs from Repository are never
+    # traversed in api/cli/scanners — routes query the child tables directly
+    # filtered by repository_id. Safe for raise_on_sql.
+    images = relationship("Image", back_populates="repository", lazy="raise_on_sql")
+    secbugs = relationship("Secbug", back_populates="repository", lazy="raise_on_sql")
     # Sprint 34.1: optional org metadata.
     pod = Column(String(200), nullable=True)
     subpod = Column(String(200), nullable=True)
 
     actionable_versions = relationship(
-        "Repository_ActionablePackageAvailableVersion", back_populates="repository"
+        "Repository_ActionablePackageAvailableVersion",
+        back_populates="repository",
+        lazy="raise_on_sql",
     )
 
     UniqueConstraint("org", "name", name="org_repo")
@@ -563,7 +615,8 @@ class Secbug(Base, TimestampMixin):
         nullable=True,
     )
 
-    repository = relationship("Repository", back_populates="secbugs")
+    # Sprint 37.2: never traversed via secbug.repository in api/cli/scanners.
+    repository = relationship("Repository", back_populates="secbugs", lazy="raise_on_sql")
     key = synonym("id")
 
     # Sprint 33.1/33.2: declare indexes already created by alembic 0002_fk_indexes
@@ -630,15 +683,28 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
     # Sprint 34.1: server-default + Python-default of "" — never NULL.
     complaints = Column(Text, default="", server_default="", nullable=False)
 
-    images = relationship("Image", back_populates="wasp")
-    repository = relationship("Repository")
+    # Sprint 37.2: lazy= audit.
+    # - images: never traversed via wasp.images in api/cli/scanners.
+    # - repository: traversed in repository_scanner/bridge.py:69 and
+    #   repository_scanner/sast/SarifResult.py:69,70,170,171,233 and
+    #   sast/semgrep/SemgrepRunner.py:16. Keep default select. Callers that
+    #   process many Wasp rows in a loop should add selectinload(Wasp.repository).
+    # - actionable / actionable_versions: never traversed via wasp.actionable*
+    #   in api/cli/scanners (the forward direction
+    #   Repository_ActionablePackageAvailableVersion.wasp is used instead).
+    images = relationship("Image", back_populates="wasp", lazy="raise_on_sql")
+    repository = relationship("Repository", lazy="select")
     actionable = relationship(
         "Repository_ActionablePackageAvailableVersion",
         back_populates="wasp",
         overlaps="actionable_versions",
+        lazy="raise_on_sql",
     )
     actionable_versions = relationship(
-        "Repository_ActionablePackageAvailableVersion", back_populates="wasp", overlaps="actionable"
+        "Repository_ActionablePackageAvailableVersion",
+        back_populates="wasp",
+        overlaps="actionable",
+        lazy="raise_on_sql",
     )
 
     # Sprint 33.1/33.2: declare indexes already created by alembic 0002_fk_indexes
@@ -828,7 +894,8 @@ class SastLobMetaData(Base, TimestampMixin):
     __tablename__ = "sast_lob_metadata"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    repository = relationship("Repository")
+    # Sprint 37.2: never traversed via lob_meta.repository in api/cli/scanners.
+    repository = relationship("Repository", lazy="raise_on_sql")
     module = Column(String(1024), nullable=False)
     sub_module = Column(String(1024), nullable=False)
     # Sprint 34.1: repository_id nullable=True — LOB metadata may be created
@@ -858,7 +925,8 @@ class SastResult(Base, TimestampMixin):
     lob_id = Column(
         ForeignKey("libinv.sast_lob_metadata.id", onupdate="CASCADE"), nullable=True
     )
-    lob_metadata = relationship("SastLobMetaData")
+    # Sprint 37.2: never traversed via result.lob_metadata in api/cli/scanners.
+    lob_metadata = relationship("SastLobMetaData", lazy="raise_on_sql")
     extras = Column(MutableDict.as_mutable(JSON), nullable=True)
     vulnsnippet = Column(Text, nullable=True)
     githubpath = Column(String(1024), nullable=True)
@@ -921,10 +989,14 @@ class Actionable(Base):
         nullable=False,
     )
 
+    # Sprint 37.2: traversed in api/onboard_package.py:45,64 (actionable.available_versions)
+    # and via the selectinload chain in get_actionable (Actionable.get_safe_versions /
+    # get_latest use the __dict__ sentinel to detect pre-loaded state). Keep select.
     available_versions = relationship(
         "ActionablePackageAvailableVersion",
         back_populates="actionable",
         cascade="all, delete-orphan",
+        lazy="select",
     )
 
     @classmethod
@@ -1321,11 +1393,19 @@ class ActionablePackageAvailableVersion(Base):
         nullable=True,
     )
     scancode_project_uuid = Column(String(36), nullable=True)
-    actionable = relationship("Actionable", back_populates="available_versions")
+    # Sprint 37.2: lazy= audit.
+    # - actionable: traversed in api/actionable/package_scan.py:45 and
+    #   api/actionable/dashboards.py via the get_actionable selectinload chain
+    #   (Repository_APAV.available_version -> APAV.actionable -> Actionable.available_versions).
+    #   cli/actionable.py:221 also walks package.available_version.actionable. Keep select.
+    # - associated_repositories: never traversed in api/cli/scanners (queries go
+    #   through Repository_APAV directly).
+    actionable = relationship("Actionable", back_populates="available_versions", lazy="select")
     associated_repositories = relationship(
         "Repository_ActionablePackageAvailableVersion",
         back_populates="available_version",
         primaryjoin="ActionablePackageAvailableVersion.uuid == Repository_ActionablePackageAvailableVersion.actionable_package_version_id",
+        lazy="raise_on_sql",
     )
 
     __table_args__ = (
@@ -1646,13 +1726,26 @@ class Repository_ActionablePackageAvailableVersion(Base):
         nullable=False,
     )
 
-    wasp = relationship("Wasp", back_populates="actionable_versions")
+    # Sprint 37.2: lazy= audit.
+    # - wasp: traversed in api/actionable/dashboards.py:86-88 (commit_id, jenkins_url,
+    #   created_at). Eagerly loaded via selectinload in Actionable.get_actionable.
+    #   Keep select.
+    # - available_version: traversed in api/actionable/dashboards.py (extensively) and
+    #   cli/actionable.py:214-221 via package.available_version.*. Pre-loaded via the
+    #   selectinload chain in get_actionable. Keep select.
+    # - repository: never traversed via row.repository in api/cli/scanners (queries
+    #   already filter on repository_id; the Repository row is fetched separately
+    #   via _common.fetch_repository).
+    wasp = relationship("Wasp", back_populates="actionable_versions", lazy="select")
     available_version = relationship(
         "ActionablePackageAvailableVersion",
         back_populates="associated_repositories",
         primaryjoin="Repository_ActionablePackageAvailableVersion.actionable_package_version_id == ActionablePackageAvailableVersion.uuid",
+        lazy="select",
     )
-    repository = relationship("Repository", back_populates="actionable_versions")
+    repository = relationship(
+        "Repository", back_populates="actionable_versions", lazy="raise_on_sql"
+    )
 
     __table_args__ = (
         # Sprint 33.1/33.2: declare indexes already created by alembic 0002_fk_indexes

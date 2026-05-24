@@ -9,13 +9,16 @@ from typing import Iterator
 import sqlalchemy as db
 from sqlalchemy import MetaData
 from sqlalchemy import Table  # noqa: F401  re-exported for callers
+from sqlalchemy import event
 from sqlalchemy.engine import Engine
 from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import Mapper
 from sqlalchemy.orm import Session as OrmSession
 from sqlalchemy.orm import scoped_session
 from sqlalchemy.orm import sessionmaker
 
 from libinv.env import DB_STRING
+from libinv.env import LIBINV_STRICT_LAZY
 
 engine: Engine = db.create_engine(
     DB_STRING,
@@ -91,6 +94,59 @@ class LibinvBase:
 Base = declarative_base(cls=LibinvBase)
 
 metadata = MetaData()
+
+
+# Sprint 37.1 — strict-lazy policy hook.
+#
+# When `LIBINV_STRICT_LAZY=true` (env var, default False), we register a
+# one-shot `Mapper.after_configured` listener that walks every mapped
+# relationship on the declarative ``Base.registry`` and flips its
+# ``lazy`` strategy to ``"raise_on_sql"``. Any subsequent implicit
+# attribute access that would otherwise trigger a lazy SELECT raises
+# ``sqlalchemy.exc.InvalidRequestError`` instead. This is a dev/CI
+# guardrail for surfacing N+1 patterns -- production default is
+# intentionally False because legitimate call sites still rely on
+# implicit loading.
+def _apply_strict_lazy_policy() -> None:
+    """Flip every mapped relationship to ``lazy='raise_on_sql'``.
+
+    Walks ``Base.registry.mappers`` (the canonical declarative registry
+    for libinv ORM classes) and swaps the default attribute-access
+    loader so subsequent implicit loads raise instead of issuing SQL.
+
+    Mechanics:
+      - ``rel.lazy`` is the public knob; we set it for introspection.
+      - The real loader used during attribute access is
+        ``rel._lazy_strategy`` (populated in ``RelationshipProperty.
+        do_init``). Replacing it with a ``RaiseLoader`` flips behavior
+        without disturbing the cached ``strategy_key`` /
+        ``_default_path_loader_key`` machinery the rest of the ORM
+        depends on.
+
+    Idempotent: re-applies the same loader on each invocation. Safe to
+    call when no mappers have been declared yet (registry empty ->
+    loop is a no-op).
+    """
+    raise_key = (("lazy", "raise_on_sql"),)
+    for mapper in Base.registry.mappers:
+        for rel in mapper.relationships:
+            rel.lazy = "raise_on_sql"
+            try:
+                raise_strategy = rel._get_strategy(raise_key)
+            except Exception:
+                # Skip relationships that don't register a raise variant
+                # (self-referential / custom strategies) rather than
+                # crash boot.
+                continue
+            # The attribute-access path calls ``_lazy_strategy`` directly;
+            # swap it to the raise variant.
+            rel._lazy_strategy = raise_strategy
+
+
+if LIBINV_STRICT_LAZY:
+    @event.listens_for(Mapper, "after_configured")
+    def _strict_lazy_after_configured() -> None:  # pragma: no cover - hook
+        _apply_strict_lazy_policy()
 
 
 @contextmanager

@@ -81,6 +81,14 @@ DB_STRING = f"postgresql://{DB_USERNAME}:{DB_PASSWORD}@{DB_HOSTNAME}/{DB_NAME}"
 
 IMAGE_SCAN_ENABLED = _parse_bool(os.getenv("IMAGE_SCAN_ENABLED"), default=False)
 
+# Sprint 37.1 — when true, register a SQLAlchemy `Mapper.after_configured`
+# hook that flips every `relationship()` to `lazy="raise_on_sql"`. This
+# turns any implicit attribute access that would issue a query into an
+# `InvalidRequestError`, surfacing N+1 patterns during dev/CI. Default
+# is intentionally False: production code paths that rely on implicit
+# loading would otherwise break.
+LIBINV_STRICT_LAZY = _parse_bool(os.getenv("LIBINV_STRICT_LAZY"), default=False)
+
 JAVA_HOME = json.loads(os.getenv("JAVA_HOME", "{}"))
 BASE_IMAGE_JAVA_VERSION_MAPPING = json.loads(os.getenv("BASE_IMAGE_JAVA_VERSION_MAPPING", "{}"))
 

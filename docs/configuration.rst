@@ -63,6 +63,18 @@ Sprint 0-16 audit. Set the required ones before starting any of the
 |                           |        |              |        | libinv_test`` against a ``postgres:15``         |
 |                           |        |              |        | service container.                              |
 +---------------------------+--------+--------------+--------+-------------------------------------------------+
+| ``LIBINV_STRICT_LAZY``    | bool   | ``false``    | 37     | Dev/CI guardrail for N+1 patterns. When set to  |
+|                           |        |              |        | ``true``, ``libinv.base`` registers a           |
+|                           |        |              |        | ``Mapper.after_configured`` hook that flips     |
+|                           |        |              |        | every ORM ``relationship()`` to                 |
+|                           |        |              |        | ``lazy="raise_on_sql"``. Any implicit attribute |
+|                           |        |              |        | access that would issue a lazy SELECT raises    |
+|                           |        |              |        | ``sqlalchemy.exc.InvalidRequestError`` instead, |
+|                           |        |              |        | forcing explicit ``selectinload`` / ``joinedload|
+|                           |        |              |        | `` decisions. Production default is ``false`` — |
+|                           |        |              |        | legitimate call sites still rely on implicit    |
+|                           |        |              |        | loading.                                        |
++---------------------------+--------+--------------+--------+-------------------------------------------------+
 
 ********
 Database
