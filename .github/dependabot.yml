@@ -1,0 +1,52 @@
+version: 2
+updates:
+  # Pip dependencies in the root requirements.txt + setup.cfg
+  - package-ecosystem: "pip"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+      day: "monday"
+    open-pull-requests-limit: 10
+    labels:
+      - "dependencies"
+    commit-message:
+      prefix: "deps"
+      include: "scope"
+    groups:
+      sqlalchemy:
+        patterns:
+          - "SQLAlchemy"
+          - "alembic"
+      flask:
+        patterns:
+          - "Flask*"
+          - "Werkzeug"
+          - "Jinja2"
+      lint:
+        patterns:
+          - "ruff"
+          - "black"
+          - "isort"
+          - "mypy"
+          - "bandit"
+          - "pip-audit"
+
+  # Same for the purldb subdirectory if it has its own requirements.txt
+  - package-ecosystem: "pip"
+    directory: "/purldb"
+    schedule:
+      interval: "weekly"
+    open-pull-requests-limit: 5
+    labels:
+      - "dependencies"
+      - "purldb"
+
+  # GitHub Actions workflows
+  - package-ecosystem: "github-actions"
+    directory: "/"
+    schedule:
+      interval: "weekly"
+    labels:
+      - "ci"
+    commit-message:
+      prefix: "ci(deps)"

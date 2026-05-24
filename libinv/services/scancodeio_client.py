@@ -40,6 +40,7 @@ from typing import List
 from typing import Optional
 from typing import Set
 from typing import TypedDict
+from typing import cast
 
 import requests
 
@@ -222,7 +223,7 @@ class ScancodeioClient:
         ``scancode.io/scanpipe/api/views.py``).
         """
         url = f"{self._base_url}/api/projects/{project_uuid}/"
-        return self._request_json(url)
+        return cast(ScanpipeProjectDTO, self._request_json(url))
 
     def list_projects_for_wasp(self, wasp_uuid: str) -> List[ScanpipeProjectDTO]:
         """Return every scanpipe project whose ``wasp_uuid_id`` matches.

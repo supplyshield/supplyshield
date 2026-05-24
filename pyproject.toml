@@ -50,6 +50,8 @@ files = [
     "libinv/base.py",
     "libinv/models.py",
     "libinv/services",
+    "libinv/api",
+    "libinv/scanners",
 ]
 follow_imports = "silent"
 ignore_missing_imports = true
@@ -75,3 +77,20 @@ disable_error_code = ["import-untyped"]
 module = "libinv.models"
 disallow_untyped_defs = false
 disable_error_code = ["return-value", "assignment", "var-annotated", "attr-defined", "misc"]
+
+# Sprint 18: expand scope to libinv/api and libinv/scanners. These packages are
+# largely untyped today; we run mypy over them to catch *future* regressions but
+# silence the noisy categories that fire on existing legacy surfaces (SQLAlchemy
+# Column typing leaks, untyped yield/return slots, dynamic attrs, etc).
+# Sprint 19+ should peel categories off this list as files are annotated.
+[[tool.mypy.overrides]]
+module = ["libinv.api.*", "libinv.scanners.*"]
+disallow_untyped_defs = false
+disable_error_code = [
+    "return-value",
+    "assignment",
+    "var-annotated",
+    "attr-defined",
+    "arg-type",
+    "valid-type",
+]

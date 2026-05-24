@@ -1,0 +1,50 @@
+# Mirrors the CI Sprint 5 linting workflow. Install with:
+#   pip install pre-commit
+#   pre-commit install
+#
+# Run on-demand:
+#   pre-commit run --all-files
+#
+# Note: this YAML supersedes the legacy `etc/pre-commit` shell script
+# (which simply ran `make check`). The old script is retained for
+# anyone who symlinks it into .git/hooks/ manually; new contributors
+# should prefer the `pre-commit` tool below.
+
+repos:
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: trailing-whitespace
+      - id: end-of-file-fixer
+      - id: check-yaml
+        exclude: ^scancode\.io/  # vendored submodule, leave alone
+      - id: check-toml
+      - id: check-added-large-files
+        args: ["--maxkb=500"]
+      - id: detect-private-key
+
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+
+  - repo: https://github.com/psf/black
+    rev: 24.10.0
+    hooks:
+      - id: black
+        language_version: python3.12
+
+  - repo: https://github.com/pycqa/isort
+    rev: 5.13.2
+    hooks:
+      - id: isort
+        args: ["--profile=black"]
+
+exclude: |
+  (?x)^(
+    alembic/versions/.*|
+    scancode\.io/.*|
+    purldb/.*|
+    etc/.*
+  )$
