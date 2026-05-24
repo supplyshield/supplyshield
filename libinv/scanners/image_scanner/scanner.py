@@ -2,6 +2,7 @@ import os
 
 import boto3
 
+from libinv.api.metrics import scan_failures_total
 from libinv.api.metrics import scan_invocations_total
 from libinv.base import session_scope
 from libinv.helpers import get_boto3_client
@@ -66,31 +67,38 @@ def scan_image_index(image_index: ImageIndex, account_id: str):
     # points (scan_orgsre_image / scan_dockerhub_image / scan_ecr_image)
     # funnel here, so this is the single chokepoint — no double-counting.
     scan_invocations_total.labels(type="image").inc()
-    for image_tar in image_index.pull_images_if_not_exist():
-        logger.info(
-            "Processing %s, Size: %s, Fresh: %s",
-            image_tar,
-            image_tar.size,
-            image_tar.freshly_pulled,
-        )
-        sbom_filename = generate_sbom_for_image_tar(image_tar)
-        with session_scope() as session:
-            # Yeah, this is weird. We'll move to something better
-            # Idea is to create unit files (let's say ricks/generate_sbom.py)
-            # with ricks.generate_sbom as worker:
-            #  with ricks.generate_sca() as sca:
-            #    ricks.parse_sca()
-            #  ...
-            image = parse_sbom_with_image_tar(
-                session=session,
-                sbom_filename=sbom_filename,
-                image_tar=image_tar,
-                account_id=account_id,
+    try:
+        for image_tar in image_index.pull_images_if_not_exist():
+            logger.info(
+                "Processing %s, Size: %s, Fresh: %s",
+                image_tar,
+                image_tar.size,
+                image_tar.freshly_pulled,
             )
-            save_layer_information_for_image(session=session, image=image, image_tar=image_tar)
-            detect_and_update_base_image(session=session, image=image)
-            sca_filename = generate_sca_from_sbom(sbom_filename)
-            parse_sca_with_image(session=session, sca_filename=sca_filename, image=image)
-        delete(sbom_filename)
-        delete(sca_filename)
-        delete(image_tar.filename)
+            sbom_filename = generate_sbom_for_image_tar(image_tar)
+            with session_scope() as session:
+                # Yeah, this is weird. We'll move to something better
+                # Idea is to create unit files (let's say ricks/generate_sbom.py)
+                # with ricks.generate_sbom as worker:
+                #  with ricks.generate_sca() as sca:
+                #    ricks.parse_sca()
+                #  ...
+                image = parse_sbom_with_image_tar(
+                    session=session,
+                    sbom_filename=sbom_filename,
+                    image_tar=image_tar,
+                    account_id=account_id,
+                )
+                save_layer_information_for_image(session=session, image=image, image_tar=image_tar)
+                detect_and_update_base_image(session=session, image=image)
+                sca_filename = generate_sca_from_sbom(sbom_filename)
+                parse_sca_with_image(session=session, sca_filename=sca_filename, image=image)
+            delete(sbom_filename)
+            delete(sca_filename)
+            delete(image_tar.filename)
+    except Exception as exc:
+        scan_failures_total.labels(
+            type="image",
+            error_class=type(exc).__name__,
+        ).inc()
+        raise

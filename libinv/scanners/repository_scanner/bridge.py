@@ -1,5 +1,6 @@
 import json
 
+from libinv.api.metrics import scan_failures_total
 from libinv.api.metrics import scan_invocations_total
 from libinv.base import conn
 from libinv.models import Account
@@ -88,27 +89,34 @@ def connect_using_queue_message_agreement(wasp: Wasp, session=None):
     # Sprint 25: count one invocation per SQS bridge message. Increment
     # BEFORE parsing so a malformed message still surfaces in the metric.
     scan_invocations_total.labels(type="repository_bridge").inc()
-    s = session or conn
-    message = json.loads(wasp.raw_message)
+    try:
+        s = session or conn
+        message = json.loads(wasp.raw_message)
 
-    for ecr_image in message["ecr_image"]:
-        if ecr_image["type"] == "ImageIndex":
-            # FIXME: Handle this properly
-            continue
+        for ecr_image in message["ecr_image"]:
+            if ecr_image["type"] == "ImageIndex":
+                # FIXME: Handle this properly
+                continue
 
-        account_id, _, _ = ecr_image["name"].partition(".")
-        _, _, image_name = ecr_image["name"].rpartition("/")
-        platform = f"{ecr_image['platform']['os']}/{ecr_image['platform']['architecture']}"
-        Account.ensure_exists(
-            account_id=account_id,
-            name=message["aws_environment"],
-            session=s,
-        )
-        connect(
-            wasp=wasp,
-            account_id=account_id,
-            image_name=image_name,
-            image_digest=ecr_image["digest"],
-            image_platform=platform,
-            session=s,
-        )
+            account_id, _, _ = ecr_image["name"].partition(".")
+            _, _, image_name = ecr_image["name"].rpartition("/")
+            platform = f"{ecr_image['platform']['os']}/{ecr_image['platform']['architecture']}"
+            Account.ensure_exists(
+                account_id=account_id,
+                name=message["aws_environment"],
+                session=s,
+            )
+            connect(
+                wasp=wasp,
+                account_id=account_id,
+                image_name=image_name,
+                image_digest=ecr_image["digest"],
+                image_platform=platform,
+                session=s,
+            )
+    except Exception as exc:
+        scan_failures_total.labels(
+            type="repository_bridge",
+            error_class=type(exc).__name__,
+        ).inc()
+        raise

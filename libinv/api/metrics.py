@@ -49,6 +49,12 @@ scan_invocations_total = Counter(
     labelnames=("type",),
     registry=_registry,
 )
+scan_failures_total = Counter(
+    "libinv_scan_failures_total",
+    "Total scan failures (exceptions raised in scan entry points).",
+    labelnames=("type", "error_class"),
+    registry=_registry,
+)
 up = Gauge(
     "libinv_up",
     "1 if libinv's Flask app is reachable.",

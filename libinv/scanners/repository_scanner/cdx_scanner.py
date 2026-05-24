@@ -3,6 +3,7 @@ import os
 import re
 from pathlib import Path
 
+from libinv.api.metrics import scan_failures_total
 from libinv.api.metrics import scan_invocations_total
 from libinv.env import BASE_IMAGE_JAVA_VERSION_MAPPING
 from libinv.env import CDXGEN_BIN
@@ -220,13 +221,20 @@ def run_cdxgen_scan(wasp: Wasp, exclude: list = []):
     # so it gets its own label rather than being lumped into
     # "repository_bridge". Increment before any work so crashes count.
     scan_invocations_total.labels(type="cdxgen").inc()
-    logger.debug("Running cdxgen scan")
-    repo_dir = wasp.repo_dir
-    scanner = CdxScanner(repo_dir)
-    scanner.detect_anomalies()
-    scanner.fix_detected_anomalies()
-    scanner.exclude_purls(exclude)
-    output_filename = scanner.run(output_dir=wasp.project_dir)
-    if scanner.errors:
-        wasp.throw(scanner.errors)
-    return output_filename
+    try:
+        logger.debug("Running cdxgen scan")
+        repo_dir = wasp.repo_dir
+        scanner = CdxScanner(repo_dir)
+        scanner.detect_anomalies()
+        scanner.fix_detected_anomalies()
+        scanner.exclude_purls(exclude)
+        output_filename = scanner.run(output_dir=wasp.project_dir)
+        if scanner.errors:
+            wasp.throw(scanner.errors)
+        return output_filename
+    except Exception as exc:
+        scan_failures_total.labels(
+            type="cdxgen",
+            error_class=type(exc).__name__,
+        ).inc()
+        raise

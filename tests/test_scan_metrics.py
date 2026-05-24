@@ -158,3 +158,74 @@ def test_run_cdxgen_scan_increments_even_when_scanner_init_fails():
             pass
 
     assert _counter_value("cdxgen") == before + 1
+
+
+# ---------------------------------------------------------------------------
+# scan_failures_total — exceptions raised inside scan entry points are
+# counted by (type, error_class) so dashboards can compute success rate
+# and group failures by root cause without parsing stack traces.
+# ---------------------------------------------------------------------------
+import pytest  # noqa: E402
+
+
+def _failure_value(label_type: str, error_class: str) -> float:
+    from libinv.api.metrics import scan_failures_total
+
+    return scan_failures_total.labels(
+        type=label_type, error_class=error_class
+    )._value.get()
+
+
+def test_image_scan_increments_failures_on_exception():
+    """A RuntimeError inside the scan body bumps scan_failures_total with
+    `type="image"` and `error_class="RuntimeError"` and re-raises."""
+    from libinv.scanners.image_scanner.scanner import scan_image_index
+
+    before = _failure_value("image", "RuntimeError")
+
+    image_index = MagicMock()
+    image_index.pull_images_if_not_exist.side_effect = RuntimeError("boom")
+
+    with pytest.raises(RuntimeError):
+        scan_image_index(image_index, account_id="acct-test")
+
+    assert _failure_value("image", "RuntimeError") == before + 1
+
+
+def test_repository_bridge_increments_failures_on_exception():
+    """A malformed message raises `json.JSONDecodeError` (a `ValueError`
+    subclass) — assert the failure counter records the concrete class
+    name so dashboards group by root cause."""
+    from libinv.scanners.repository_scanner.bridge import (
+        connect_using_queue_message_agreement,
+    )
+
+    before = _failure_value("repository_bridge", "JSONDecodeError")
+
+    wasp = MagicMock()
+    wasp.raw_message = "not-json"
+
+    with pytest.raises(ValueError):
+        connect_using_queue_message_agreement(wasp, session=MagicMock())
+
+    assert _failure_value("repository_bridge", "JSONDecodeError") == before + 1
+
+
+def test_run_cdxgen_scan_increments_failures_on_exception():
+    """A constructor crash inside `run_cdxgen_scan` bumps the failure
+    counter with `type="cdxgen"` / `error_class="RuntimeError"` and
+    re-raises."""
+    from libinv.scanners.repository_scanner import cdx_scanner
+
+    before = _failure_value("cdxgen", "RuntimeError")
+
+    wasp = MagicMock()
+    wasp.repo_dir = "/tmp/repo"
+
+    with patch.object(
+        cdx_scanner, "CdxScanner", side_effect=RuntimeError("env exploded")
+    ):
+        with pytest.raises(RuntimeError):
+            cdx_scanner.run_cdxgen_scan(wasp)
+
+    assert _failure_value("cdxgen", "RuntimeError") == before + 1
