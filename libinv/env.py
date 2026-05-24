@@ -81,6 +81,15 @@ DB_STRING = f"postgresql://{DB_USERNAME}:{DB_PASSWORD}@{DB_HOSTNAME}/{DB_NAME}"
 
 IMAGE_SCAN_ENABLED = _parse_bool(os.getenv("IMAGE_SCAN_ENABLED"), default=False)
 
+# Sprint 48.2 — when true, skip the SQLAlchemy reflection in
+# ``libinv/scio_models.py`` at import time and replace ``ScanpipeProject`` /
+# ``DiscoveredPackage`` with raise-on-access stubs. Callers must use the
+# HTTP client exposed by ``libinv.services.scancodeio.get_default_client``
+# instead. Any accidental SQL access to scio_models in HTTP mode surfaces
+# loud (``RuntimeError``) rather than silently hitting the legacy reflection
+# path.
+LIBINV_SCIO_USE_HTTP = _parse_bool(os.getenv("LIBINV_SCIO_USE_HTTP"), default=False)
+
 # Sprint 37.1 — when true, register a SQLAlchemy `Mapper.after_configured`
 # hook that flips every `relationship()` to `lazy="raise_on_sql"`. This
 # turns any implicit attribute access that would issue a query into an

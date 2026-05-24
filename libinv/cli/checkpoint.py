@@ -22,7 +22,7 @@ def checkpoint(get: bool, checkpoint_time: str | None, list_: bool) -> None:
     with Session() as session:
         if get:
             active_checkpoint = DeploymentCheckpoint.get(session)
-            print(active_checkpoint)
+            click.echo(active_checkpoint)
 
         elif checkpoint_time:
             if checkpoint_time == "NOW":
@@ -34,7 +34,7 @@ def checkpoint(get: bool, checkpoint_time: str | None, list_: bool) -> None:
         else:
             for checkpoint in DeploymentCheckpoint.list(session):
                 if checkpoint.active:
-                    print("* ", end="")
+                    click.echo("* ", nl=False)
                 else:
-                    print("  ", end="")
-                print(checkpoint)
+                    click.echo("  ", nl=False)
+                click.echo(checkpoint)

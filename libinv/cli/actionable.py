@@ -222,7 +222,7 @@ def get_actionable_for(repository_id: int, environment: str) -> None:
                         ],
                     ]
                 )
-    print(table)
+    click.echo(table)
 
 
 @cli.command("scan-purl", help="Scan a package url for vulnerabilities")
