@@ -121,9 +121,11 @@ def test_enumerate_all_routes(client):
         "/compare/builds",
         "/docs/",
         "/docs/<path:path>",
+        "/healthz",
         "/libinv/sast/<sid>",
         "/libinv/sast/update",
         "/onboard/new_actionable",
+        "/readyz",
         "/wasp/",
         "/wasp/get_wasp_by_id",
     ]

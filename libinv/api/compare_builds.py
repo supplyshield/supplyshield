@@ -78,6 +78,13 @@ def get_diff_builds():
     session = Session()
 
     try:
+        # NOTE: This query joins on scanpipe_project.wasp_uuid_id, which is not
+        # exposed via scancodeio's ProjectFilterSet (verified in Sprint 14 against
+        # scanpipe/api/views.py). Migrating to HTTP requires either:
+        #   1. Upstream patch to add `wasp_uuid_id` to ProjectFilterSet.Meta.fields, OR
+        #   2. A SupplyShield-side proxy endpoint, OR
+        #   3. Maintaining a wasp_uuid → project_uuid mapping in libinv.
+        # Until any of those land, this route keeps the direct SQL join.
         wasps = (
             session.query(Wasp)
             .join(ScanpipeProject, ScanpipeProject.wasp_uuid_id == Wasp.uuid)

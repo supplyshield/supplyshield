@@ -1237,14 +1237,31 @@ class ActionablePackageAvailableVersion(Base):
 
     @property
     def vulnerability_severities(self):
+        if self.scancode_project_uuid is None:
+            return None
+
+        from libinv.services.scancodeio_client import get_default_client
+
+        http_client = get_default_client()
+        if http_client is not None:
+            try:
+                return http_client.get_severity_counts(self.scancode_project_uuid)
+            except Exception as exc:
+                logger.warning(
+                    "SCIO HTTP get_severity_counts failed for %s: %s; "
+                    "falling back to SQL",
+                    self.scancode_project_uuid,
+                    exc,
+                )
+
         query = text(
             """
             WITH RECURSIVE severities(level) AS (
                 VALUES ('critical'), ('high'), ('medium'), ('low'), ('unknown')
             ),
             mdata AS (
-                SELECT 
-                    CASE 
+                SELECT
+                    CASE
                         WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(sd.affected_by_vulnerabilities) AS elem WHERE elem::varchar LIKE '%CRITICAL%') THEN 'critical'
                         WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(sd.affected_by_vulnerabilities) AS elem WHERE elem::varchar LIKE '%HIGH%') THEN 'high'
                         WHEN EXISTS (SELECT 1 FROM jsonb_array_elements(sd.affected_by_vulnerabilities) AS elem WHERE elem::varchar LIKE '%MEDIUM%' OR elem::varchar LIKE '%MODERATE%') THEN 'medium'
@@ -1252,30 +1269,28 @@ class ActionablePackageAvailableVersion(Base):
                         ELSE 'unknown'
                     END AS severity_level
                 FROM public.scanpipe_discoveredpackage sd
-                WHERE 
+                WHERE
                     jsonb_array_length(sd.affected_by_vulnerabilities) > 0
                     AND sd.project_id = :project_id
             )
-            SELECT 
+            SELECT
                 s.level AS severity_level,
                 COALESCE(COUNT(m.severity_level), 0) as count
             FROM severities s
             LEFT JOIN mdata m ON m.severity_level = s.level
             GROUP BY s.level
-            ORDER BY 
-                CASE s.level 
-                    WHEN 'critical' THEN 1 
-                    WHEN 'high' THEN 2 
-                    WHEN 'medium' THEN 3 
-                    WHEN 'low' THEN 4 
-                    ELSE 5 
+            ORDER BY
+                CASE s.level
+                    WHEN 'critical' THEN 1
+                    WHEN 'high' THEN 2
+                    WHEN 'medium' THEN 3
+                    WHEN 'low' THEN 4
+                    ELSE 5
                 END;
             """
         )
 
         with session_scope() as session:
-            if self.scancode_project_uuid is None:
-                return None
             result = session.execute(query, {"project_id": self.scancode_project_uuid})
             data = [{"severity_level": row.severity_level, "count": row.count} for row in result]
             return data

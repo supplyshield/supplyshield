@@ -9,6 +9,7 @@ from libinv.api.actionable import actionable
 from libinv.api.auth import register_global_auth
 from libinv.api.compare_builds import compare_builds
 from libinv.api.graph import blastradius
+from libinv.api.health import health
 from libinv.api.onboard_package import onboard_package
 from libinv.api.request_id import register_request_id
 from libinv.api.wasp import wasp
@@ -25,6 +26,7 @@ app.register_blueprint(blastradius, url_prefix="/blastradius")
 app.register_blueprint(onboard_package, url_prefix="/onboard")
 app.register_blueprint(wasp, url_prefix="/wasp")
 app.register_blueprint(compare_builds, url_prefix="/compare")
+app.register_blueprint(health)
 
 register_global_auth(app)
 install_json_formatter_if_configured()
