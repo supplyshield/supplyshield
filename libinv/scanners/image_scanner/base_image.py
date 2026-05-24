@@ -6,7 +6,6 @@ from typing import List
 from sqlalchemy import and_
 from sqlalchemy.orm import Session as OrmSession
 
-from libinv.base import conn
 from libinv.models import ORGSRE_ACCOUNT_ID
 from libinv.models import Image
 from libinv.models import Layer
@@ -39,38 +38,6 @@ def save_layer_information_for_image(session: OrmSession, image: Image, image_ta
             logger.debug(f"Updated: {image} for layer {layer}")
     session.commit()
     logger.info("Layer information saved")
-
-
-def detect_and_update_parent_image(image: Image):
-    """
-    Detects and updates the parent_image field in the database for the given image.
-    parent image need not be orgsre image, it can be any other image. For orgsre only parent
-    images, see detect_and_update_base_image
-    """
-    logger.info("Detecting parent image")
-    first_layer = image.sorted_layers[0]
-
-    # TODO: check possiblilty of eager loading layers
-    # TODO: We can optimize this by only taking orgsre images as candidates but
-    # then we will lose ability to detect non-orgsre base images (from within ecr)
-    # if it even so happens
-    candidates = (
-        conn.query(Image)
-        .join(Image.layers)
-        .filter(
-            and_(Layer.id == first_layer.id, Layer.seq == first_layer.seq, Image.id != image.id)
-        )
-    )
-
-    parent_image = detect_parent_image(image=image, candidates=candidates)
-    if not parent_image:
-        logging.debug(f"No parent image found for {image}")
-        return
-
-    image.parent_image_id = parent_image.id
-    conn.add(image)
-    conn.commit()
-    print(f"[+] parent image updated for: {image} to {parent_image}")
 
 
 def detect_and_update_base_image(session: OrmSession, image: Image):

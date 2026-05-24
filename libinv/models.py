@@ -543,7 +543,7 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
             shutil.rmtree(self._project_dir)
             logger.debug(f"Delete {self._project_dir}")
 
-        return True
+        return False
 
     def __str__(self):
         return f"{self.uuid}"

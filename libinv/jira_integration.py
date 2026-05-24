@@ -4,7 +4,6 @@ from datetime import timezone
 
 from jira import JIRA
 
-from libinv.base import conn  # noqa: F401  retained: Secbug.get_any / all_active still use it
 from libinv.base import session_scope
 from libinv.env import JIRA_TOKEN
 from libinv.env import JIRA_URL
@@ -141,7 +140,7 @@ def delete_outdated_secbugs(session, all_fetched_secbug_keys):
 
     logger.info(f"DEBUG: Fetched {len(all_fetched_secbug_keys)} secbugs from Jira API")
 
-    secbugs_in_db = Secbug.all_active().all()
+    secbugs_in_db = Secbug.all_active(session=session).all()
     logger.info(f"DEBUG: Found {len(secbugs_in_db)} active secbugs in database")
 
     deleted_count = 0
@@ -258,10 +257,7 @@ def _process_secbug_issue(session, issue, customfield_ids, pulled_at):
     )
 
     # Update existing or create new secbug.
-    # Note: Secbug.get_any still reaches the module-level `conn` internally; the
-    # scoped session means it shares the same thread-local backing as `session`.
-    # A future sprint can thread `session` into the model method.
-    if Secbug.get_any(secbug_id):
+    if Secbug.get_any(secbug_id, session=session):
         logger.debug(f"Already exists, updating {secbug_id}")
         # Always update existing secbugs (original behavior)
         get_or_update_entry(
