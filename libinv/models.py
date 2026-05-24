@@ -42,6 +42,7 @@ from sqlalchemy.orm import Mapped
 from sqlalchemy.orm import declarative_mixin
 from sqlalchemy.orm import mapped_column
 from sqlalchemy.orm import relationship
+from sqlalchemy.orm import selectinload
 from sqlalchemy.orm import synonym
 from sqlalchemy.schema import UniqueConstraint
 from sqlalchemy.sql.expression import ClauseElement
@@ -675,7 +676,10 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
             self.throw(f"commit does not exist: {commit}")
             raise
 
-        assert repo.head.is_detached
+        if not repo.head.is_detached:
+            raise RuntimeError(
+                f"Expected detached HEAD after checkout, got branch {repo.head.ref}"
+            )
         logger.info(f"[+] Cloned {repository}")
         return target_dir
 
@@ -871,6 +875,19 @@ class Actionable(Base):
         )
 
     def get_safe_versions(self, session=None):
+        # Prefer eagerly-loaded relationship to avoid N+1 round trips when
+        # the caller pre-loaded `available_versions` (e.g. via selectinload
+        # in `get_actionable_and_secure_versions`). `"available_versions" in
+        # self.__dict__` is the canonical sentinel for "this collection has
+        # already been populated on the instance" — it does NOT trigger a
+        # lazy load (which `getattr(self, "available_versions")` would).
+        if "available_versions" in self.__dict__:
+            result = [
+                v
+                for v in self.available_versions
+                if v.vulns_count == 0 and v.scan_status == "SUCCESS"
+            ]
+            return sorted(result, key=lambda v: MavenVersion(v.version))
         s = session or conn
         result = list(
             s.query(ActionablePackageAvailableVersion)
@@ -928,6 +945,11 @@ class Actionable(Base):
         conn.commit()
 
     def get_latest(self, session=None):
+        # Prefer eagerly-loaded relationship to avoid N+1 round trips.
+        # See `get_safe_versions` for the `__dict__` sentinel rationale.
+        if "available_versions" in self.__dict__:
+            latest = [v for v in self.available_versions if v.is_latest]
+            return latest[0] if latest else None
         s = session or conn
         return (
             s.query(ActionablePackageAvailableVersion)
@@ -972,8 +994,28 @@ class Actionable(Base):
 
     @classmethod
     def get_actionable(cls, session, repository_id, environment):
+        # Eagerly load the per-row chain that `get_actionable_and_secure_versions`
+        # walks for every row:
+        #   row.available_version            -> ActionablePackageAvailableVersion
+        #   row.available_version.actionable -> Actionable
+        #   row.available_version.actionable.available_versions
+        #                                    -> all sibling versions (used by
+        #                                       Actionable.get_latest /
+        #                                       get_safe_versions)
+        #   row.wasp                         -> commit + jenkins_url metadata
+        # Without selectinload this is the classic N+1 cascade: per outer row
+        # SQLAlchemy issues 3+ lazy-load queries. With selectinload each level
+        # is a single IN(...) query, collapsing O(P) -> O(1).
         return (
             session.query(Repository_ActionablePackageAvailableVersion)
+            .options(
+                selectinload(
+                    Repository_ActionablePackageAvailableVersion.available_version
+                )
+                .selectinload(ActionablePackageAvailableVersion.actionable)
+                .selectinload(Actionable.available_versions),
+                selectinload(Repository_ActionablePackageAvailableVersion.wasp),
+            )
             .join(ActionablePackageAvailableVersion)
             .filter(Repository_ActionablePackageAvailableVersion.repository_id == repository_id)
             .filter(Repository_ActionablePackageAvailableVersion.environment == environment)

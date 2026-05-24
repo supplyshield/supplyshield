@@ -19,7 +19,10 @@ def save_layer_information_for_image(conn: Session, image: Image, image_tar: Ima
     file = tf.extractfile("manifest.json")
     manifest = json.load(file)
 
-    assert len(manifest) == 1
+    if len(manifest) != 1:
+        raise ValueError(
+            f"Expected exactly 1 manifest entry, got {len(manifest)}"
+        )
 
     logger.info("Saving layer information")
     manifest = manifest[0]

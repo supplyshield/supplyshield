@@ -62,7 +62,10 @@ class VcsApp(ABC):
             token = self.get_token()
             self.write_token_to_netrc(token)
 
-        assert os.path.exists(self.NETRC_FILE)
+        if not os.path.exists(self.NETRC_FILE):
+            raise FileNotFoundError(
+                f"Expected {self.NETRC_FILE} to exist after authenticate()"
+            )
 
     def clone(self, url, target_dir):
         return Repo.clone_from(url, target_dir)

@@ -3,37 +3,58 @@ name: Test Coverage
 on:
   pull_request:
     branches:
-      - master  
+      - master
 
 jobs:
   test:
     runs-on: [self-hosted, linux, x64, codeql]
 
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: libinv_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      TEST_DATABASE_URL: postgresql://postgres:postgres@localhost:5432/libinv_test
+
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
           ref: ${{ github.head_ref }}
 
       - name: Set up Python
-        uses: actions/setup-python@v2
+        uses: actions/setup-python@v5
         with:
-          python-version: '3.10'  
+          python-version: '3.12'
 
       - name: Install Build Tools
         run: |
-          sudo add-apt-repository ppa:deadsnakes/ppa
           sudo apt-get update
-          sudo apt-get install -y tree unzip zip python3-pip build-essential ca-certificates curl wget nodejs gnupg lsb-release libpq-dev git postgresql-client jq wait-for-it --no-install-recommends 
-          
+          sudo apt-get install -y tree unzip zip python3-pip build-essential ca-certificates curl wget nodejs gnupg lsb-release libpq-dev git postgresql-client jq wait-for-it --no-install-recommends
+
       - name: Install python dependencies
         run: |
           make python-deps-dev
-      
-      - name: Run tests with coverage
+
+      - name: Run unit tests with coverage
         run: |
           make coverage
-      
+
+      - name: Run integration tests
+        run: |
+          make integration-tests
+
       - name: Generate coverage report
         run: |
           coverage report
