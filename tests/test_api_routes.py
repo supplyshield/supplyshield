@@ -160,10 +160,10 @@ def test_sast_data_route_found(client):
     fake_result.findings = []
     fake_query = MagicMock()
     fake_query.filter_by.return_value.first.return_value = fake_result
-    with patch("libinv.api.app.conn") as conn_mock, patch(
+    with patch("libinv.api.app.ScopedSession") as scoped_mock, patch(
         "libinv.api.app.render_template", return_value="rendered"
     ):
-        conn_mock.query.return_value = fake_query
+        scoped_mock.return_value.query.return_value = fake_query
         resp = client.get("/libinv/sast/abc")
     assert resp.status_code == 200
     assert resp.data == b"rendered"
@@ -173,8 +173,8 @@ def test_sast_data_route_not_found(client):
     """``/libinv/sast/<sid>`` returns 404 when no row matches."""
     fake_query = MagicMock()
     fake_query.filter_by.return_value.first.return_value = None
-    with patch("libinv.api.app.conn") as conn_mock:
-        conn_mock.query.return_value = fake_query
+    with patch("libinv.api.app.ScopedSession") as scoped_mock:
+        scoped_mock.return_value.query.return_value = fake_query
         resp = client.get("/libinv/sast/missing")
     assert resp.status_code == 404
     assert b"Not Found" in resp.data
@@ -214,8 +214,8 @@ def test_sast_update_with_correct_token_valid_body_returns_200(client, auth_head
     fake_result = MagicMock()
     fake_query = MagicMock()
     fake_query.filter_by.return_value.first.return_value = fake_result
-    with patch("libinv.api.app.conn") as conn_mock:
-        conn_mock.query.return_value = fake_query
+    with patch("libinv.api.app.ScopedSession") as scoped_mock:
+        scoped_mock.return_value.query.return_value = fake_query
         resp = client.put(
             "/libinv/sast/update",
             headers=auth_headers,
@@ -408,8 +408,8 @@ def test_wasp_get_by_id_missing_param_returns_400(client):
 def test_wasp_get_by_id_not_found(client):
     fake_query = MagicMock()
     fake_query.filter_by.return_value.first.return_value = None
-    with patch("libinv.api.wasp.conn") as conn_mock:
-        conn_mock.query.return_value = fake_query
+    with patch("libinv.api.wasp.ScopedSession") as scoped_mock:
+        scoped_mock.return_value.query.return_value = fake_query
         resp = client.get("/wasp/get_wasp_by_id?id=00000000-0000-0000-0000-000000000000")
     assert resp.status_code == 404
 
@@ -420,8 +420,8 @@ def test_wasp_get_by_id_found(client):
     fake_wasp.environment = "prod"
     fake_query = MagicMock()
     fake_query.filter_by.return_value.first.return_value = fake_wasp
-    with patch("libinv.api.wasp.conn") as conn_mock:
-        conn_mock.query.return_value = fake_query
+    with patch("libinv.api.wasp.ScopedSession") as scoped_mock:
+        scoped_mock.return_value.query.return_value = fake_query
         resp = client.get("/wasp/get_wasp_by_id?id=abc/extra")
     assert resp.status_code == 200
     body = resp.get_json() or {}

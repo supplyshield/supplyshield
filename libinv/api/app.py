@@ -13,7 +13,6 @@ from libinv.api.onboard_package import onboard_package
 from libinv.api.request_id import register_request_id
 from libinv.api.wasp import wasp
 from libinv.base import ScopedSession
-from libinv.base import conn
 from libinv.env import API_DOCS_FOLDER
 from libinv.logger import install_json_formatter_if_configured
 from libinv.models import SastResult
@@ -54,7 +53,8 @@ def docs(path="index.html"):
 
 @app.route("/libinv/sast/<sid>")
 def sast_data(sid):
-    result = conn.query(SastResult).filter_by(id=sid).first()
+    session = ScopedSession()
+    result = session.query(SastResult).filter_by(id=sid).first()
     if not result:
         return "Not Found", 404
 
@@ -77,7 +77,8 @@ def update_sast_result():
     else:
         return jsonify({"error": "sec_id key missing"}), 400
 
-    result = conn.query(SastResult).filter_by(id=sec_id).first()
+    session = ScopedSession()
+    result = session.query(SastResult).filter_by(id=sec_id).first()
     if not result:
         return jsonify({"error": "SEC ID not found"}), 404
 
@@ -96,7 +97,7 @@ def update_sast_result():
     else:
         result.secbugurl = update_data  # we will be given sec bug id
 
-    conn.commit()
+    session.commit()
     return jsonify({"error": None}), 200
 
 

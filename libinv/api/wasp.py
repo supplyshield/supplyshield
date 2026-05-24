@@ -2,7 +2,7 @@ from flask import Blueprint
 from flask import jsonify
 from flask import request
 
-from libinv.base import conn
+from libinv.base import ScopedSession
 from libinv.models import Wasp
 
 wasp = Blueprint("wasp", __name__, template_folder="templates")
@@ -20,7 +20,8 @@ def get_wasp_by_id():
         return jsonify({"error": "id parameter missing"}), 400
 
     uuid = wasp_id.split("/")[0]
-    result = conn.query(Wasp).filter_by(uuid=uuid).first()
+    session = ScopedSession()
+    result = session.query(Wasp).filter_by(uuid=uuid).first()
     if result:
         return (
             jsonify({"repository_id": result.repository_id, "environment": result.environment}),

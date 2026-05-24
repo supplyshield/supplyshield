@@ -116,8 +116,13 @@ def scan_latest_versions() -> None:
                         continue
 
                     latest_package = actionable_package.get_latest()
-                    logger.info(f"Scanning latest version {latest_package.version}")  # type: ignore[union-attr]
-                    latest_package.scan_and_update_results()  # type: ignore[union-attr]
+                    if latest_package is None:
+                        logger.warning(
+                            f"No latest version found for {actionable_package.package_url}. Skipping."
+                        )
+                        continue
+                    logger.info(f"Scanning latest version {latest_package.version}")
+                    latest_package.scan_and_update_results()
             except Exception as e:
                 logger.error(f"Error scanning latest version for {actionable_package.package_url}: {e}")
 
@@ -198,7 +203,10 @@ def get_actionable_for(repository_id: int, environment: str) -> None:
 
     with session_scope() as session:
         repository = session.query(Repository).filter(Repository.id == repository_id).first()
-        logger.info(f"[+] Getting actionable purls for {repository.name}..")  # type: ignore[union-attr]
+        if repository is None:
+            logger.error(f"Repository with id={repository_id} not found.")
+            return
+        logger.info(f"[+] Getting actionable purls for {repository.name}..")
         actionable_packages = Actionable.get_actionable(session, repository_id, environment)
         for package in actionable_packages:
             if not package.available_version.is_safe:
@@ -233,13 +241,15 @@ def scan_package(package_url: str) -> None:
 @click.argument("version", type=str)
 def get_safe_version(package_url: str) -> None:
     with session_scope() as session:
-        packages = (
+        package = (
             session.query(ActionablePackageAvailableVersion)
             .filter(ActionablePackageAvailableVersion.package_url == package_url)
             .first()
         )
-        for package in packages:  # type: ignore[union-attr]
-            logger.info(package.get_safe_upgrade())
+        if package is None:
+            logger.error(f"No package found for package_url={package_url}.")
+            return
+        logger.info(package.get_safe_upgrade())
 
 
 @cli.command("raise-sca-as-git-issue", help="")

@@ -1,6 +1,8 @@
 import json
 import logging
 
+from sqlalchemy.orm import Session as OrmSession
+
 from libinv.base import conn
 from libinv.models import SastLobMetaData
 from libinv.models import SastResult
@@ -18,10 +20,11 @@ class SarifResult:
     parse sarif result
     """
 
-    def __init__(self, config, sariffile, source) -> None:
+    def __init__(self, config, sariffile, source, session: OrmSession | None = None) -> None:
         self.sarifjson = json.load(open(sariffile, "r"))
         self.config = config
         self.source = source
+        self._session = session
         default_module = DefaultMode(config)
 
         self.rulesId_ModeParser = {
@@ -29,6 +32,11 @@ class SarifResult:
         }
         self.memo_lob_id = {}  # { pod::subpod::module :  lob_id from sast_meta db} cache
         self.rulemetadata = self.parsesarifmetadata()
+
+    @property
+    def _s(self):
+        """Return the active session: caller-provided or the legacy ``conn`` fallback."""
+        return self._session or conn
 
     def add_lob_module(self):
         """
@@ -46,7 +54,7 @@ class SarifResult:
                 continue
 
             res = (
-                conn.query(SastLobMetaData)
+                self._s.query(SastLobMetaData)
                 .filter_by(repository_id=self.config.wasp.repository_id, sub_module=ruleid)
                 .first()
             )
@@ -67,8 +75,8 @@ class SarifResult:
                     repository_id=self.config.wasp.repository_id,
                     bugcounts=0,
                 )
-                conn.add(metadata)
-                conn.commit()
+                self._s.add(metadata)
+                self._s.commit()
                 self.memo_lob_id[key] = metadata.id
 
     def add_sarif_result_to_db(self):
@@ -79,7 +87,7 @@ class SarifResult:
                 sarif_row, subpath_without_base
             )
 
-            record = conn.query(SastResult).filter_by(id=fingerprint).first()
+            record = self._s.query(SastResult).filter_by(id=fingerprint).first()
 
             prioriy = PriorityEnum.MEDIUM  # default Priority
             public_initial_point = ""
@@ -134,7 +142,7 @@ class SarifResult:
                     record.extras["public_endpoints"] = extras["public_endpoints"]
                     record.public_initial_point = public_initial_point
                     record.priority = prioriy.value
-                    conn.commit()
+                    self._s.commit()
                     continue
 
             record = SastResult(
@@ -159,8 +167,8 @@ class SarifResult:
                 wasp_id=str(self.config.wasp.id),
                 file_path=str(subpath_without_base),
             )
-            conn.add(record)
-            conn.commit()
+            self._s.add(record)
+            self._s.commit()
 
         return
 
