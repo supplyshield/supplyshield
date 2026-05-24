@@ -24,7 +24,7 @@ from sqlalchemy import and_, distinct, func, or_
 from libinv.models import (
     ActionablePackageAvailableVersion,
     Repository,
-    Repository_ActionablePackageAvailableVersion,
+    RepositoryActionablePackageAvailableVersion,
 )
 
 # Type aliases for clarity.
@@ -92,10 +92,10 @@ class RepositoryListingQuery:
                 Repository.provider,
                 Repository.pod,
                 Repository.subpod,
-                Repository_ActionablePackageAvailableVersion.environment,
+                RepositoryActionablePackageAvailableVersion.environment,
                 func.count(
                     distinct(
-                        Repository_ActionablePackageAvailableVersion.actionable_package_version_id
+                        RepositoryActionablePackageAvailableVersion.actionable_package_version_id
                     )
                 ).label("total_packages"),
                 func.count(distinct(ActionablePackageAvailableVersion.uuid))
@@ -106,13 +106,13 @@ class RepositoryListingQuery:
                 ),
             )
             .join(
-                Repository_ActionablePackageAvailableVersion,
+                RepositoryActionablePackageAvailableVersion,
                 Repository.id
-                == Repository_ActionablePackageAvailableVersion.repository_id,
+                == RepositoryActionablePackageAvailableVersion.repository_id,
             )
             .join(
                 ActionablePackageAvailableVersion,
-                Repository_ActionablePackageAvailableVersion.actionable_package_version_id
+                RepositoryActionablePackageAvailableVersion.actionable_package_version_id
                 == ActionablePackageAvailableVersion.uuid,
             )
         )
@@ -124,7 +124,7 @@ class RepositoryListingQuery:
         value = self.params.get("environment", "")
         if value:
             self._query = self._query.filter(
-                Repository_ActionablePackageAvailableVersion.environment == value
+                RepositoryActionablePackageAvailableVersion.environment == value
             )
         return self
 
@@ -159,7 +159,7 @@ class RepositoryListingQuery:
             Repository.provider,
             Repository.pod,
             Repository.subpod,
-            Repository_ActionablePackageAvailableVersion.environment,
+            RepositoryActionablePackageAvailableVersion.environment,
         )
 
     def having_vulnerabilities(self) -> "RepositoryListingQuery":
@@ -204,10 +204,10 @@ class RepositoryListingQuery:
                 rows = (
                     self.session.query(
                         distinct(
-                            Repository_ActionablePackageAvailableVersion.environment
+                            RepositoryActionablePackageAvailableVersion.environment
                         )
                     )
-                    .order_by(Repository_ActionablePackageAvailableVersion.environment)
+                    .order_by(RepositoryActionablePackageAvailableVersion.environment)
                     .all()
                 )
                 result["environments"] = [r[0] for r in rows]
@@ -247,7 +247,7 @@ class RepositoryListingQuery:
         self._group_by_repository()
         rows = self._query.order_by(
             Repository.name,
-            Repository_ActionablePackageAvailableVersion.environment,
+            RepositoryActionablePackageAvailableVersion.environment,
         ).all()
         facets = self._compute_facets()
         return rows, facets

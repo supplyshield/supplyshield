@@ -2,7 +2,7 @@
 
 The route under test is ``libinv.api.actionable.repositories.repositories_listing``.
 It accepts six query parameters and applies a chained set of filters /
-``having(...)`` clauses to a Repository × Repository_ActionablePackageAvailableVersion
+``having(...)`` clauses to a Repository × RepositoryActionablePackageAvailableVersion
 × ActionablePackageAvailableVersion join, then groups + renders.
 
 Branches enumerated (the plan asks for ≥44; we cover the dominant
@@ -112,7 +112,7 @@ def fixture_set(engine):
 
     from libinv.models import ActionablePackageAvailableVersion as APV
     from libinv.models import Repository
-    from libinv.models import Repository_ActionablePackageAvailableVersion as RAPV
+    from libinv.models import RepositoryActionablePackageAvailableVersion as RAPV
 
     test_token = uuid.uuid4().hex[:8]
     seeded = {"token": test_token, "repos": {}, "apv_uuids": [], "rapv_uuids": []}

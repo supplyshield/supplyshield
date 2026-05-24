@@ -8,7 +8,7 @@ as the row count grows.
 
 Before the Sprint-5 fix
 ~~~~~~~~~~~~~~~~~~~~~~~
-For ``N`` ``Repository_ActionablePackageAvailableVersion`` rows, iterating
+For ``N`` ``RepositoryActionablePackageAvailableVersion`` rows, iterating
 the result triggered ``~3*N`` lazy-load round trips (``available_version``,
 ``actionable``, plus the per-row ``get_latest()``/``get_safe_versions()``
 queries) on top of the outer SELECT.
@@ -111,7 +111,7 @@ def seeded_repo(engine):
         Actionable,
         ActionablePackageAvailableVersion,
         Repository,
-        Repository_ActionablePackageAvailableVersion,
+        RepositoryActionablePackageAvailableVersion,
         Wasp,
     )
 
@@ -176,7 +176,7 @@ def seeded_repo(engine):
 
             assert current_version_uuid is not None
 
-            assoc = Repository_ActionablePackageAvailableVersion(
+            assoc = RepositoryActionablePackageAvailableVersion(
                 wasp_uuid=wasp.uuid,
                 actionable_package_version_id=current_version_uuid,
                 repository_id=repo.id,
@@ -191,8 +191,8 @@ def seeded_repo(engine):
     # Teardown: delete in FK-safe order. Actionable cascade takes care of
     # the version rows; the association table is wiped explicitly first.
     with Session(bind=engine) as s:
-        s.query(Repository_ActionablePackageAvailableVersion).filter(
-            Repository_ActionablePackageAvailableVersion.repository_id == repo_id
+        s.query(RepositoryActionablePackageAvailableVersion).filter(
+            RepositoryActionablePackageAvailableVersion.repository_id == repo_id
         ).delete(synchronize_session=False)
         for au in created_actionable_uuids:
             actionable = s.query(Actionable).filter(Actionable.uuid == au).one_or_none()

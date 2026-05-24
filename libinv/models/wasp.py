@@ -146,17 +146,17 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
     #   process many Wasp rows in a loop should add selectinload(Wasp.repository).
     # - actionable / actionable_versions: never traversed via wasp.actionable*
     #   in api/cli/scanners (the forward direction
-    #   Repository_ActionablePackageAvailableVersion.wasp is used instead).
+    #   RepositoryActionablePackageAvailableVersion.wasp is used instead).
     images = relationship("Image", back_populates="wasp", lazy="raise_on_sql")
     repository = relationship("Repository", lazy="select")
     actionable = relationship(
-        "Repository_ActionablePackageAvailableVersion",
+        "RepositoryActionablePackageAvailableVersion",
         back_populates="wasp",
         overlaps="actionable_versions",
         lazy="raise_on_sql",
     )
     actionable_versions = relationship(
-        "Repository_ActionablePackageAvailableVersion",
+        "RepositoryActionablePackageAvailableVersion",
         back_populates="wasp",
         overlaps="actionable",
         lazy="raise_on_sql",

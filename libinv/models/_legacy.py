@@ -176,13 +176,17 @@ from libinv.models.wasp import is_valid_raw_message  # noqa: E402,F401
 
 # Sprint 41.2: Actionable family (Actionable,
 # ActionablePackageAvailableVersion,
-# Repository_ActionablePackageAvailableVersion) lives in
+# RepositoryActionablePackageAvailableVersion) lives in
 # libinv/models/actionable.py. Back-imported so historical
 # ``from libinv.models._legacy import Actionable`` and test patches on
 # ``libinv.models._legacy.Actionable`` keep resolving.
 from libinv.models.actionable import Actionable  # noqa: E402,F401
 from libinv.models.actionable import ActionablePackageAvailableVersion  # noqa: E402,F401
-from libinv.models.actionable import Repository_ActionablePackageAvailableVersion  # noqa: E402,F401
+from libinv.models.actionable import RepositoryActionablePackageAvailableVersion  # noqa: E402,F401
+# Deprecated alias — preserved so historical
+# ``from libinv.models._legacy import Repository_ActionablePackageAvailableVersion``
+# keeps working until callers migrate.
+Repository_ActionablePackageAvailableVersion = RepositoryActionablePackageAvailableVersion  # noqa: N816,E402
 
 # Sprint 41.3: Repository / Account / DeploymentCheckpoint live in
 # libinv/models/repository.py. Back-imported so historical

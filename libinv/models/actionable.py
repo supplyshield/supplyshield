@@ -4,7 +4,7 @@ Owns three closely-coupled ORM classes:
 
 - ``Actionable`` — a versionless package row (``safe_actionable`` table).
 - ``ActionablePackageAvailableVersion`` — a single (purl, version) leaf.
-- ``Repository_ActionablePackageAvailableVersion`` — the many-to-many
+- ``RepositoryActionablePackageAvailableVersion`` — the many-to-many
   association row tying APAV ↔ Repository through a Wasp commit.
 
 Co-locating them keeps ``Actionable.populate``, the bulk INSERT…ON
@@ -426,18 +426,18 @@ class Actionable(Base):
         # SQLAlchemy issues 3+ lazy-load queries. With selectinload each level
         # is a single IN(...) query, collapsing O(P) -> O(1).
         return (
-            session.query(Repository_ActionablePackageAvailableVersion)
+            session.query(RepositoryActionablePackageAvailableVersion)
             .options(
                 selectinload(
-                    Repository_ActionablePackageAvailableVersion.available_version
+                    RepositoryActionablePackageAvailableVersion.available_version
                 )
                 .selectinload(ActionablePackageAvailableVersion.actionable)
                 .selectinload(Actionable.available_versions),
-                selectinload(Repository_ActionablePackageAvailableVersion.wasp),
+                selectinload(RepositoryActionablePackageAvailableVersion.wasp),
             )
             .join(ActionablePackageAvailableVersion)
-            .filter(Repository_ActionablePackageAvailableVersion.repository_id == repository_id)
-            .filter(Repository_ActionablePackageAvailableVersion.environment == environment)
+            .filter(RepositoryActionablePackageAvailableVersion.repository_id == repository_id)
+            .filter(RepositoryActionablePackageAvailableVersion.environment == environment)
             .all()
         )
 
@@ -572,9 +572,9 @@ class ActionablePackageAvailableVersion(Base):
     #   through Repository_APAV directly).
     actionable = relationship("Actionable", back_populates="available_versions", lazy="select")
     associated_repositories = relationship(
-        "Repository_ActionablePackageAvailableVersion",
+        "RepositoryActionablePackageAvailableVersion",
         back_populates="available_version",
-        primaryjoin="ActionablePackageAvailableVersion.uuid == Repository_ActionablePackageAvailableVersion.actionable_package_version_id",
+        primaryjoin="ActionablePackageAvailableVersion.uuid == RepositoryActionablePackageAvailableVersion.actionable_package_version_id",
         lazy="raise_on_sql",
     )
 
@@ -858,7 +858,7 @@ class ActionablePackageAvailableVersion(Base):
         return cve_set
 
 
-class Repository_ActionablePackageAvailableVersion(Base):
+class RepositoryActionablePackageAvailableVersion(Base):
     """
     Model representing actionable for a repository and the corresponding version in ActionablePackageAvailableVersion table
     """
@@ -910,7 +910,7 @@ class Repository_ActionablePackageAvailableVersion(Base):
     available_version = relationship(
         "ActionablePackageAvailableVersion",
         back_populates="associated_repositories",
-        primaryjoin="Repository_ActionablePackageAvailableVersion.actionable_package_version_id == ActionablePackageAvailableVersion.uuid",
+        primaryjoin="RepositoryActionablePackageAvailableVersion.actionable_package_version_id == ActionablePackageAvailableVersion.uuid",
         lazy="select",
     )
     repository = relationship(

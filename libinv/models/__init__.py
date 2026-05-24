@@ -68,7 +68,9 @@ from libinv.models.package import License  # noqa: F401
 from libinv.exceptions import MalformedCaterpillarMessage  # noqa: F401
 from libinv.models.package import Package  # noqa: F401
 from libinv.models.package import PackageLicenseAssociation  # noqa: F401
-from libinv.models.actionable import Repository_ActionablePackageAvailableVersion  # noqa: F401
+from libinv.models.actionable import RepositoryActionablePackageAvailableVersion  # noqa: F401
+# Deprecated alias — remove in a future cleanup once all internal callers migrate.
+Repository_ActionablePackageAvailableVersion = RepositoryActionablePackageAvailableVersion  # noqa: N816
 # Sprint 41.4: Secbug + SAST classes live in libinv/models/secbug.py + sast.py.
 from libinv.models.sast import SastLobMetaData  # noqa: F401
 from libinv.models.sast import SastResult  # noqa: F401

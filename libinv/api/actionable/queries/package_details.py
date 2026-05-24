@@ -9,7 +9,7 @@ The builder owns:
 * The ``DiscoveredPackage`` SQL fallback path when the SCIO HTTP client
   is unavailable or fails.
 * The ``EPSS`` bulk fetch by CVE-id list.
-* The ``Repository`` + ``Repository_ActionablePackageAvailableVersion``
+* The ``Repository`` + ``RepositoryActionablePackageAvailableVersion``
   join that surfaces which repositories use a given package version.
 
 Everything that is *not* data-access (CVE extraction loop, severity
@@ -27,7 +27,7 @@ from typing import Optional
 from libinv.models import EPSS
 from libinv.models import ActionablePackageAvailableVersion
 from libinv.models import Repository
-from libinv.models import Repository_ActionablePackageAvailableVersion
+from libinv.models import RepositoryActionablePackageAvailableVersion
 from libinv.scio_models import DiscoveredPackage
 
 
@@ -100,15 +100,15 @@ class PackageDetailsQuery:
                 Repository.provider,
                 Repository.pod,
                 Repository.subpod,
-                Repository_ActionablePackageAvailableVersion.environment,
+                RepositoryActionablePackageAvailableVersion.environment,
             )
             .join(
-                Repository_ActionablePackageAvailableVersion,
+                RepositoryActionablePackageAvailableVersion,
                 Repository.id
-                == Repository_ActionablePackageAvailableVersion.repository_id,
+                == RepositoryActionablePackageAvailableVersion.repository_id,
             )
             .filter(
-                Repository_ActionablePackageAvailableVersion.actionable_package_version_id
+                RepositoryActionablePackageAvailableVersion.actionable_package_version_id
                 == actionable_package_uuid
             )
             .all()

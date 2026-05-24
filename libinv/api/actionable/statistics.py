@@ -13,7 +13,7 @@ from libinv.base import Session
 from libinv.base import session_scope
 from libinv.models import ActionablePackageAvailableVersion
 from libinv.models import Repository
-from libinv.models import Repository_ActionablePackageAvailableVersion
+from libinv.models import RepositoryActionablePackageAvailableVersion
 
 from libinv.api.actionable import actionable
 
@@ -207,12 +207,12 @@ def _compute_repository_stats(session) -> Dict[str, Any]:
         )
         .select_from(Repository)
         .join(
-            Repository_ActionablePackageAvailableVersion,
-            Repository.id == Repository_ActionablePackageAvailableVersion.repository_id,
+            RepositoryActionablePackageAvailableVersion,
+            Repository.id == RepositoryActionablePackageAvailableVersion.repository_id,
         )
         .join(
             ActionablePackageAvailableVersion,
-            Repository_ActionablePackageAvailableVersion.actionable_package_version_id
+            RepositoryActionablePackageAvailableVersion.actionable_package_version_id
             == ActionablePackageAvailableVersion.uuid,
         )
         .one()
@@ -251,18 +251,18 @@ def _compute_environment_stats(session) -> Dict[str, Any]:
     """
     env_stats = (
         session.query(
-            Repository_ActionablePackageAvailableVersion.environment,
+            RepositoryActionablePackageAvailableVersion.environment,
             func.count(
-                distinct(Repository_ActionablePackageAvailableVersion.repository_id)
+                distinct(RepositoryActionablePackageAvailableVersion.repository_id)
             ).label("repo_count"),
             func.count(
                 distinct(
-                    Repository_ActionablePackageAvailableVersion.actionable_package_version_id
+                    RepositoryActionablePackageAvailableVersion.actionable_package_version_id
                 )
             ).label("package_count"),
         )
-        .group_by(Repository_ActionablePackageAvailableVersion.environment)
-        .order_by(Repository_ActionablePackageAvailableVersion.environment)
+        .group_by(RepositoryActionablePackageAvailableVersion.environment)
+        .order_by(RepositoryActionablePackageAvailableVersion.environment)
         .all()
     )
 
@@ -328,12 +328,12 @@ def _compute_pod_stats(session) -> Dict[str, Any]:
         )
         .select_from(Repository)
         .join(
-            Repository_ActionablePackageAvailableVersion,
-            Repository.id == Repository_ActionablePackageAvailableVersion.repository_id,
+            RepositoryActionablePackageAvailableVersion,
+            Repository.id == RepositoryActionablePackageAvailableVersion.repository_id,
         )
         .join(
             ActionablePackageAvailableVersion,
-            Repository_ActionablePackageAvailableVersion.actionable_package_version_id
+            RepositoryActionablePackageAvailableVersion.actionable_package_version_id
             == ActionablePackageAvailableVersion.uuid,
         )
         .filter(Repository.pod.isnot(None))

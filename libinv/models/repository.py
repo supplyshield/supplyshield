@@ -65,7 +65,7 @@ class Repository(Base):
     subpod = Column(String(200), nullable=True)
 
     actionable_versions = relationship(
-        "Repository_ActionablePackageAvailableVersion",
+        "RepositoryActionablePackageAvailableVersion",
         back_populates="repository",
         lazy="raise_on_sql",
     )

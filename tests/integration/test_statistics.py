@@ -225,7 +225,7 @@ def _seed_package_version(
     that affect bucket placement (epss_score, vulns_count).
     """
     from libinv.models import ActionablePackageAvailableVersion
-    from libinv.models import Repository_ActionablePackageAvailableVersion
+    from libinv.models import RepositoryActionablePackageAvailableVersion
 
     apav = ActionablePackageAvailableVersion(
         scan_status=scan_status,
@@ -240,7 +240,7 @@ def _seed_package_version(
     db_session.add(apav)
     db_session.flush()
 
-    link = Repository_ActionablePackageAvailableVersion(
+    link = RepositoryActionablePackageAvailableVersion(
         actionable_package_version_id=apav.uuid,
         repository_id=repo.id,
         environment="stage",
