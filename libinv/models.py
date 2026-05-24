@@ -325,8 +325,9 @@ class Repository(Base):
         except ModuleNotFoundError:
             return None
 
-    def raise_or_update_sca_issues(self, environment="stage"):
-        actionables = Actionable.get_actionable_and_secure_versions(conn, self.id, environment)
+    def raise_or_update_sca_issues(self, environment="stage", session=None):
+        s = session or conn
+        actionables = Actionable.get_actionable_and_secure_versions(s, self.id, environment)
         if not actionables["results"]:
             Actionable.close_sca_issue(self)
         else:
@@ -534,8 +535,9 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
             trace = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
             self.throw(f"{exc_type} : {exc_value} : {trace}")
 
-        conn.add(self)
-        conn.commit()
+        s = getattr(self, "_session", None) or conn
+        s.add(self)
+        s.commit()
         logger.debug(f"Cleaning up wasp {self}")
         if hasattr(self, "_project_dir"):
             shutil.rmtree(self._project_dir)
@@ -610,6 +612,7 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
             environment=environment,
             jenkins_url=jenkins_url,
         )
+        wasp._session = s
 
         s.add(wasp)
         s.commit()
@@ -624,10 +627,11 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
         """
         Throw some food out. Specify why any actions on wasp failed without failing entire libinv
         """
+        s = getattr(self, "_session", None) or conn
         try:
-            conn.connection()
+            s.connection()
         except PendingRollbackError:
-            conn.rollback()
+            s.rollback()
 
         self.complaints += why
         self.ate_successfully = False

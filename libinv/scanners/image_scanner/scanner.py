@@ -78,7 +78,7 @@ def scan_image_index(image_index: ImageIndex, account_id: str):
                 image_tar=image_tar,
                 account_id=account_id,
             )
-            save_layer_information_for_image(conn=session, image=image, image_tar=image_tar)
+            save_layer_information_for_image(session=session, image=image, image_tar=image_tar)
             detect_and_update_base_image(session=session, image=image)
             sca_filename = generate_sca_from_sbom(sbom_filename)
             parse_sca_with_image(session=session, sca_filename=sca_filename, image=image)

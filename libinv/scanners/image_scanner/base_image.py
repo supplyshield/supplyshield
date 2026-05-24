@@ -4,8 +4,8 @@ from tarfile import TarFile
 from typing import List
 
 from sqlalchemy import and_
+from sqlalchemy.orm import Session as OrmSession
 
-from libinv.base import Session
 from libinv.base import conn
 from libinv.models import ORGSRE_ACCOUNT_ID
 from libinv.models import Image
@@ -14,7 +14,7 @@ from libinv.scanners.image_scanner.image_tarball import ImageTarBall
 from libinv.scanners.image_scanner.logger import logger
 
 
-def save_layer_information_for_image(conn: Session, image: Image, image_tar: ImageTarBall):
+def save_layer_information_for_image(session: OrmSession, image: Image, image_tar: ImageTarBall):
     tf = TarFile(image_tar.filename)
     file = tf.extractfile("manifest.json")
     manifest = json.load(file)
@@ -29,15 +29,15 @@ def save_layer_information_for_image(conn: Session, image: Image, image_tar: Ima
     layers = manifest["Layers"]
     for seq, layer_entry in enumerate(layers):
         layer_id, _, _ = layer_entry.partition(".tar.gz")
-        layer = conn.query(Layer).filter_by(image_id=image.id, seq=seq).one_or_none()
+        layer = session.query(Layer).filter_by(image_id=image.id, seq=seq).one_or_none()
 
         if layer and layer.id == layer_id:
             logger.debug(f"Existing: {image} already has layer {layer}")
         else:
             layer = Layer(image_id=image.id, id=layer_id, seq=seq)
-            conn.add(layer)
+            session.add(layer)
             logger.debug(f"Updated: {image} for layer {layer}")
-    conn.commit()
+    session.commit()
     logger.info("Layer information saved")
 
 
@@ -73,7 +73,7 @@ def detect_and_update_parent_image(image: Image):
     print(f"[+] parent image updated for: {image} to {parent_image}")
 
 
-def detect_and_update_base_image(session: Session, image: Image):
+def detect_and_update_base_image(session: OrmSession, image: Image):
     logger.info("Detecting base image")
     try:
         first_layer = image.sorted_layers[0]
