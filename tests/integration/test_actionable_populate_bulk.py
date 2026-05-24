@@ -99,12 +99,12 @@ def test_actionable_populate_issues_bounded_inserts(
         finally:
             s.close()
 
-    with patch("libinv.models.session_scope", _scope), patch.object(
+    with patch("libinv.models._legacy.session_scope", _scope), patch.object(
         Actionable,
         "get_actionable_for",
         classmethod(lambda cls, *a, **kw: synthetic_purls),
         create=True,
-    ), patch("libinv.models.is_blacklist", lambda _name: False):
+    ), patch("libinv.models._legacy.is_blacklist", lambda _name: False):
         query_counter["count"] = 0
         query_counter["statements"].clear()
 
@@ -165,12 +165,12 @@ def test_actionable_populate_idempotent_on_repeat(
             s.close()
 
     # First pass: seed the rows.
-    with patch("libinv.models.session_scope", _scope), patch.object(
+    with patch("libinv.models._legacy.session_scope", _scope), patch.object(
         Actionable,
         "get_actionable_for",
         classmethod(lambda cls, *a, **kw: synthetic_purls),
         create=True,
-    ), patch("libinv.models.is_blacklist", lambda _name: False):
+    ), patch("libinv.models._legacy.is_blacklist", lambda _name: False):
         Actionable.populate(repository_id=None, environment=None)
 
     # Snapshot row counts BEFORE the second pass.
@@ -189,12 +189,12 @@ def test_actionable_populate_idempotent_on_repeat(
 
     # Second pass: the same purls. ON CONFLICT DO NOTHING must keep the
     # row counts unchanged AND not raise an IntegrityError.
-    with patch("libinv.models.session_scope", _scope), patch.object(
+    with patch("libinv.models._legacy.session_scope", _scope), patch.object(
         Actionable,
         "get_actionable_for",
         classmethod(lambda cls, *a, **kw: synthetic_purls),
         create=True,
-    ), patch("libinv.models.is_blacklist", lambda _name: False):
+    ), patch("libinv.models._legacy.is_blacklist", lambda _name: False):
         query_counter["count"] = 0
         query_counter["statements"].clear()
 
@@ -278,8 +278,8 @@ def test_fetch_and_store_versions_bulk_inserts(engine, query_counter):
     # ORM's UUID/VARCHAR coercion defect that Sprint 37 tracks separately.
     actionable_like = SimpleNamespace(uuid=parent_uuid, package_url=parent_purl)
 
-    with patch("libinv.models.session_scope", _scope), patch(
-        "libinv.models.requests.post", return_value=_FakeResponse()
+    with patch("libinv.models._legacy.session_scope", _scope), patch(
+        "libinv.models._legacy.requests.post", return_value=_FakeResponse()
     ):
         query_counter["count"] = 0
         query_counter["statements"].clear()

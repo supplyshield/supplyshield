@@ -74,8 +74,12 @@ disable_error_code = ["import-untyped"]
 # categories that fire on legacy untyped surfaces (SQLAlchemy declarative
 # attributes, dynamically-assigned ``self._session``, etc). When Sprint 18+
 # broadens coverage, remove entries from ``disable_error_code`` here.
+# Sprint 39.1: models.py was split into a libinv/models/ package — the
+# override pattern now uses ``libinv.models.*`` (wildcard) so the same
+# legacy-error suppressions apply to every submodule (_legacy.py,
+# image.py, and the upcoming package.py / vulnerability.py / …).
 [[tool.mypy.overrides]]
-module = "libinv.models"
+module = ["libinv.models", "libinv.models.*"]
 disallow_untyped_defs = false
 disable_error_code = ["return-value", "assignment", "var-annotated", "attr-defined", "misc"]
 

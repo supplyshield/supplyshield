@@ -18,7 +18,6 @@ import semver
 from git.exc import GitCommandError
 from jsonschema import validate
 from packageurl import PackageURL
-from sqlalchemy import CHAR
 from sqlalchemy import JSON
 from sqlalchemy import Boolean
 from sqlalchemy import Column
@@ -32,7 +31,6 @@ from sqlalchemy import String
 from sqlalchemy import Text
 from sqlalchemy import and_
 from sqlalchemy import cast
-from sqlalchemy import delete
 from sqlalchemy import exists
 from sqlalchemy import func
 from sqlalchemy import select
@@ -43,7 +41,6 @@ from sqlalchemy.exc import PendingRollbackError
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped
 from sqlalchemy.orm import Session as OrmSession
-from sqlalchemy.orm import declarative_mixin
 from sqlalchemy.orm import mapped_column
 from sqlalchemy.orm import relationship
 from sqlalchemy.orm import selectinload
@@ -58,6 +55,7 @@ if TYPE_CHECKING:
 from libinv.base import Base
 from libinv.base import conn
 from libinv.base import session_scope
+from libinv.models._base import TimestampMixin
 from libinv.env import EXCLUDED_REPOS
 from libinv.env import LIBINV_TEMP_DIR
 from libinv.env import PURLDB_API_URL
@@ -110,119 +108,6 @@ class PackageLicenseAssociation(Base):
     )
 
 
-@declarative_mixin
-class TimestampMixin:
-    # Sprint 34.1: server_default=func.now() means Postgres always populates
-    # these on INSERT, so they are NOT NULL by construction. Marking explicit.
-    created_at = Column(
-        DateTime(timezone=True), server_default=func.now(), nullable=False
-    )
-    updated_at = Column(
-        DateTime(timezone=True),
-        server_default=func.now(),
-        onupdate=func.now(),
-        nullable=False,
-    )
-
-
-class Image(Base, TimestampMixin):
-    __tablename__ = "images"
-
-    id = Column(Integer, primary_key=True)
-    name = Column(String(100), nullable=False)
-    # Sprint 34.1: explicit nullable=True for optional build/CI metadata.
-    backend_tech = Column(String(24), nullable=True)
-    account_id = Column(
-        ForeignKey("libinv.accounts.id", onupdate="CASCADE", ondelete="CASCADE"), nullable=False
-    )
-    digest = Column(String(72), nullable=False)
-    tag = Column(String(128), nullable=True)
-    # Sprint 34.3: git SHA-1 is 40 hex chars (SHA-256 is 64). String(128) was
-    # ~3x oversized; tightened to 40 to match git's canonical commit-hash length.
-    # Sprint 34.1: nullable=True — legacy images may predate commit linkage.
-    commit = Column(String(40), nullable=True)
-    platform = Column(String(24), nullable=False)
-    # Sprint 34.1: parent/base/repo/wasp FKs are nullable=True — root images
-    # have no parent, and images may exist before being bridged to a repo/wasp.
-    parent_image_id = Column(
-        ForeignKey("libinv.images.id", onupdate="CASCADE", ondelete="CASCADE"), nullable=True
-    )
-    base_image_id = Column(
-        ForeignKey("libinv.images.id", onupdate="CASCADE", ondelete="CASCADE"), nullable=True
-    )
-    repository_id = Column(
-        ForeignKey("libinv.repositories.id", onupdate="CASCADE", ondelete="CASCADE"),
-        nullable=True,
-    )
-    wasp_id = Column(
-        ForeignKey("libinv.wasps.id", onupdate="CASCADE", ondelete="CASCADE"), nullable=True
-    )
-
-    # Sprint 37.2: lazy= audit (paired with LIBINV_STRICT_LAZY flag in Sprint 37.1).
-    # - parent_image: traversed by get_base_image_of() walking up chain. lazy="select" required.
-    # - base_image: only the FK is read directly (image.base_image_id); the relationship
-    #   itself is never traversed in api/cli/scanners. Safe for raise_on_sql.
-    # - packages: traversed in image_scanner/sca.py (with selectinload), image_scanner/sbom.py
-    #   (with selectinload), and cli/query.py. Keep default select.
-    # - layers: traversed by sorted_layers (called from base_image.py) and join in
-    #   detect_and_update_base_image. Keep default select.
-    # - repository: never traversed via image.repository in api/cli/scanners. Safe for raise.
-    # - wasp: only assigned (image.wasp = wasp in bridge.py); never traversed for reads.
-    #   Safe for raise_on_sql.
-    parent_image = relationship(
-        "Image", remote_side=[id], foreign_keys=[parent_image_id], lazy="select"
-    )
-    base_image = relationship(
-        "Image", remote_side=[id], foreign_keys=[base_image_id], lazy="raise_on_sql"
-    )
-    packages = relationship("ImagePackageAssociation", back_populates="image", lazy="select")
-    layers = relationship("Layer", back_populates="image", lazy="select")
-    repository = relationship("Repository", back_populates="images", lazy="raise_on_sql")
-    wasp = relationship("Wasp", back_populates="images", lazy="raise_on_sql")
-
-    # Sprint 33.1/33.2: declare indexes already created by alembic 0002_fk_indexes
-    __table_args__ = (
-        Index("ix_images_account_id", "account_id"),
-        Index("ix_images_base_image_id", "base_image_id"),
-        Index("ix_images_parent_image_id", "parent_image_id"),
-        Index("ix_images_repository_id", "repository_id"),
-        Index("ix_images_wasp_id", "wasp_id"),
-        {"schema": "libinv"},
-    )
-
-    def __str__(self):
-        return f"{self.name}-{self.id}"
-
-    @property
-    def sorted_layers(self) -> str:
-        return sorted(self.layers, key=lambda x: x.seq)
-
-    def is_parent_image_of(self, other: "Image"):
-        """
-        Return True if self is a parent image of other.
-        Parent image is a different image that contains all the layers of child and no more.
-        """
-        other_layers = other.sorted_layers
-        self_layers = self.sorted_layers
-
-        if len(self_layers) >= len(other_layers):
-            return False
-
-        for seq, layer in enumerate(self.sorted_layers):
-            if layer != other_layers[seq]:
-                return False
-        return True
-
-    @classmethod
-    def get_by_id(cls, session, image_id):
-        return session.get(Image, {"id": image_id})
-
-    @classmethod
-    def get_all_dev_image_ids(cls, session):
-        ids = session.query(Image.id).filter(Image.account_id != ORGSRE_ACCOUNT_ID)
-        return list(map(lambda x: x[0], ids))  # because sqlachemy returns tuples in ids
-
-
 class Package(Base):
     __tablename__ = "packages"
 
@@ -257,34 +142,6 @@ class Package(Base):
 
     def __str__(self):
         return self.purl
-
-
-class ImagePackageAssociation(Base):
-    __tablename__ = "image_package_association"
-
-    image_id = Column(
-        ForeignKey("libinv.images.id", onupdate="CASCADE", ondelete="CASCADE"), primary_key=True
-    )
-    package_id = Column(
-        ForeignKey("libinv.packages.id", onupdate="CASCADE", ondelete="CASCADE"), primary_key=True
-    )
-    # Sprint 34.1: optional free-form metadata blob.
-    pkg_metadata = Column("metadata", Text, nullable=True)
-
-    # Sprint 37.2: lazy= audit.
-    # - image: never traversed via association.image in api/cli/scanners.
-    # - package: traversed in image_scanner/sca.py + sbom.py via
-    #   selectinload(...ImagePackageAssociation.package). Keep select.
-    image = relationship("Image", back_populates="packages", lazy="raise_on_sql")
-    package = relationship("Package", back_populates="images", lazy="select")
-
-    Index("not-null-metadata", pkg_metadata, mysql_length=1)
-
-    # Sprint 33.1/33.2: declare indexes already created by alembic 0002_fk_indexes
-    __table_args__ = (
-        Index("ix_image_package_association_package_id", "package_id"),
-        {"schema": "libinv"},
-    )
 
 
 class VulnerabilityPackageAssociation(Base):
@@ -363,23 +220,6 @@ class License(Base):
     def set_license_name(self, name):
         if name:
             self.name = name[:MAX_LENGTH_LICENSE]
-
-
-class Layer(Base, TimestampMixin):
-    __tablename__ = "layers"
-    id = Column(CHAR(length=64), primary_key=True)
-    image_id = Column(
-        ForeignKey("libinv.images.id", onupdate="CASCADE", ondelete="CASCADE"), primary_key=True
-    )
-    seq = Column(Integer, primary_key=True, nullable=False)
-    # Sprint 37.2: back-ref never traversed via layer.image; only Image.layers is read.
-    image = relationship("Image", back_populates="layers", lazy="raise_on_sql")
-
-    def __eq__(self, other):
-        return self.id == other.id and self.seq == other.seq
-
-    def __str__(self):
-        return self.id
 
 
 class Repository(Base):
@@ -532,64 +372,6 @@ class DeploymentCheckpoint(Base, TimestampMixin):
     def list(cls, session):
         checkpoints = session.query(DeploymentCheckpoint).all()
         return checkpoints
-
-
-class LatestImage(Base):
-    """
-    Latest images as per DeploymentCheckpoint
-    """
-
-    __tablename__ = "latest_images"
-    image_id = Column(
-        ForeignKey("libinv.images.id", onupdate="CASCADE", ondelete="CASCADE"), primary_key=True
-    )
-    account_id = Column(
-        ForeignKey("libinv.accounts.id", onupdate="CASCADE", ondelete="CASCADE"), primary_key=True
-    )  # This helps to speed up joins with account table
-
-    # Sprint 33.1/33.2: declare indexes already created by alembic 0002_fk_indexes
-    __table_args__ = (
-        Index("ix_latest_images_account_id", "account_id"),
-        {"schema": "libinv"},
-    )
-
-    @classmethod
-    def calibrate(cls, session, checkpoint):
-        """
-        Calibrate latest images as per given checkpoint. Images after the checkpoints are not
-        considered
-        """
-        session.execute(delete(LatestImage))
-        stmt = text(
-            """
-        INSERT INTO latest_images
-        SELECT
-              images.id, images.account_id
-          FROM
-              images
-              INNER JOIN (
-                      SELECT
-                          name,
-                          account_id,
-                          platform,
-                          max(created_at) AS created_at
-                      FROM
-                          images
-                      WHERE created_at <= :checkpoint
-                      GROUP BY
-                          name, account_id, platform
-                  )
-                      AS finder -- finder has latest image data
-                      ON
-                      images.name = finder.name
-                      AND images.account_id
-                          = finder.account_id
-                      AND images.platform = finder.platform
-                      AND images.created_at
-                          = finder.created_at;
-           """
-        )
-        session.execute(stmt, {"checkpoint": checkpoint})
 
 
 class Secbug(Base, TimestampMixin):
@@ -2129,3 +1911,21 @@ def sort_versions(version_list):
     except ValueError as e:
         logger.error(f"Error sorting versions: {e}")
         return [None]
+
+
+# Sprint 39.2: re-import the extracted Image-domain ORM classes at the
+# bottom of the file so they remain accessible as module globals from
+# inside ``DeploymentCheckpoint.set`` (which calls
+# ``LatestImage.calibrate(...)`` at runtime) and from any legacy callers
+# that still do ``from libinv.models._legacy import Image`` etc.
+#
+# Placement at the bottom is intentional: ``libinv.models.image``
+# imports ``ORGSRE_ACCOUNT_ID`` from this module (``_legacy``), so the
+# only safe time to back-import its symbols is *after* ``_legacy.py`` is
+# fully evaluated. By the time the runtime ever calls
+# ``LatestImage.calibrate``, both modules have finished loading.
+from libinv.models.image import Image  # noqa: E402,F401
+from libinv.models.image import ImagePackageAssociation  # noqa: E402,F401
+from libinv.models.image import Layer  # noqa: E402,F401
+from libinv.models.image import LatestImage  # noqa: E402,F401
+
