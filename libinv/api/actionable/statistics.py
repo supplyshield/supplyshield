@@ -58,21 +58,19 @@ def _compute_statistics(session):
         func.sum(ActionablePackageAvailableVersion.vulns_count).label("total_vulnerabilities"),
     ).first()
 
-    # Calculate EPSS priority distributions
-    p0_packages = (
-        session.query(func.count(ActionablePackageAvailableVersion.uuid))
+    # Calculate EPSS priority distributions — one SQL statement using
+    # PG ``COUNT(*) FILTER (WHERE ...)`` aggregates so all five buckets
+    # (p0/p1/p2/p3/no_epss) share a single scan of the table.
+    bucket_row = session.query(
+        func.count(ActionablePackageAvailableVersion.uuid)
         .filter(
             and_(
                 ActionablePackageAvailableVersion.epss_score > 0.8,
                 ActionablePackageAvailableVersion.vulns_count > 0,
             )
         )
-        .scalar()
-        or 0
-    )
-
-    p1_packages = (
-        session.query(func.count(ActionablePackageAvailableVersion.uuid))
+        .label("p0"),
+        func.count(ActionablePackageAvailableVersion.uuid)
         .filter(
             and_(
                 ActionablePackageAvailableVersion.epss_score > 0.7,
@@ -80,12 +78,8 @@ def _compute_statistics(session):
                 ActionablePackageAvailableVersion.vulns_count > 0,
             )
         )
-        .scalar()
-        or 0
-    )
-
-    p2_packages = (
-        session.query(func.count(ActionablePackageAvailableVersion.uuid))
+        .label("p1"),
+        func.count(ActionablePackageAvailableVersion.uuid)
         .filter(
             and_(
                 ActionablePackageAvailableVersion.epss_score > 0.5,
@@ -93,12 +87,8 @@ def _compute_statistics(session):
                 ActionablePackageAvailableVersion.vulns_count > 0,
             )
         )
-        .scalar()
-        or 0
-    )
-
-    p3_packages = (
-        session.query(func.count(ActionablePackageAvailableVersion.uuid))
+        .label("p2"),
+        func.count(ActionablePackageAvailableVersion.uuid)
         .filter(
             and_(
                 ActionablePackageAvailableVersion.epss_score <= 0.5,
@@ -106,21 +96,22 @@ def _compute_statistics(session):
                 ActionablePackageAvailableVersion.vulns_count > 0,
             )
         )
-        .scalar()
-        or 0
-    )
-
-    no_epss_packages = (
-        session.query(func.count(ActionablePackageAvailableVersion.uuid))
+        .label("p3"),
+        func.count(ActionablePackageAvailableVersion.uuid)
         .filter(
             and_(
                 ActionablePackageAvailableVersion.epss_score.is_(None),
                 ActionablePackageAvailableVersion.vulns_count > 0,
             )
         )
-        .scalar()
-        or 0
-    )
+        .label("no_epss"),
+    ).one()
+
+    p0_packages = bucket_row.p0 or 0
+    p1_packages = bucket_row.p1 or 0
+    p2_packages = bucket_row.p2 or 0
+    p3_packages = bucket_row.p3 or 0
+    no_epss_packages = bucket_row.no_epss or 0
 
     # Extract values from the aggregated query
     total_packages = package_stats.total_packages or 0

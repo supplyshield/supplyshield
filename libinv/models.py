@@ -306,11 +306,12 @@ class Repository(Base):
         return self.vcs.clone(self.url, target_dir)
 
     @classmethod
-    def get_by_git_url(cls, git_url):
+    def get_by_git_url(cls, git_url, session=None):
+        s = session or conn
         try:
             repo_url = Repository.from_url(git_url)
             repo = (
-                conn.query(Repository)
+                s.query(Repository)
                 .filter(
                     and_(
                         Repository.name == repo_url.name,
@@ -342,17 +343,18 @@ class Account(Base):
         return self.type == "prod"
 
     @classmethod
-    def ensure_exists(cls, account_id, name=None, account_type="stage"):
+    def ensure_exists(cls, account_id, name=None, account_type="stage", session=None):
         """
         Create Account if it does not exist, nop otherwise
         """
-        if not conn.query(cls).filter(cls.id == account_id).one_or_none():
+        s = session or conn
+        if not s.query(cls).filter(cls.id == account_id).one_or_none():
             if not name:
                 raise ValueError(
                     f"Account id: {account_id} does not exist. Cannot create new account without a name"
                 )
             new_account = cls(id=account_id, name=name, type=account_type)
-            conn.add(new_account)
+            s.add(new_account)
             logger.info(f"Created new account id: {account_id} name: {name} type: {account_type}")
 
 
@@ -475,17 +477,19 @@ class Secbug(Base, TimestampMixin):
         return True if self.deleted_at else False
 
     @classmethod
-    def get(cls, id: str):
-        return cls.all_active().filter(cls.id == id).first()
+    def get(cls, id: str, session=None):
+        return cls.all_active(session=session).filter(cls.id == id).first()
 
     @classmethod
-    def get_any(cls, id: str):
+    def get_any(cls, id: str, session=None):
         """Return secbug with given id, even if deleted"""
-        return conn.query(cls).filter(cls.id == id).first()
+        s = session or conn
+        return s.query(cls).filter(cls.id == id).first()
 
     @classmethod
-    def all_active(cls):
-        return conn.query(cls).filter(cls.deleted_at == None)  # noqa: E711
+    def all_active(cls, session=None):
+        s = session or conn
+        return s.query(cls).filter(cls.deleted_at == None)  # noqa: E711
 
 
 class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
@@ -542,7 +546,7 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
         return f"{self.uuid}"
 
     @classmethod
-    def eat_caterpillar_message(cls, message: dict):
+    def eat_caterpillar_message(cls, message: dict, session=None):
         """
         Messages must be sent in the following format:
 
@@ -570,6 +574,7 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
                 "timestamp": "2024-09-20-03:45:42"
             }
         """
+        s = session or conn
 
         if not is_valid_raw_message(message):
             raise MalformedCaterpillarMessage("Invalid wasp received")
@@ -585,7 +590,7 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
             logger.error(f"[!] Excluded repository: {repository_url}")
             return
 
-        repository, created = get_or_create(conn, Repository, **explode_git_url(repository_url))
+        repository, created = get_or_create(s, Repository, **explode_git_url(repository_url))
         if created:
             logger.debug(f"[*] Created repository: {repository}")
 
@@ -605,8 +610,8 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
             jenkins_url=jenkins_url,
         )
 
-        conn.add(wasp)
-        conn.commit()
+        s.add(wasp)
+        s.commit()
         logger.info(f"Wasp ate caterpillar: {wasp}")
         return wasp
 
@@ -763,7 +768,7 @@ class Actionable(Base):
     )
 
     @classmethod
-    def populate(cls, repository_id=None, environment=None):
+    def populate(cls, repository_id=None, environment=None, session=None):
         actionable_purls = cls.get_actionable_for(repository_id, environment)
         for purl in actionable_purls:
             purl_name = f"pkg:{purl.type}/{purl.namespace}/{purl.name}"
@@ -794,7 +799,8 @@ class Actionable(Base):
                 session.add(actionable)
                 session.commit()
 
-    def fetch_and_store_versions(self):
+    def fetch_and_store_versions(self, session=None):
+        s = session or conn
         logger.info(f"Processing: {self.package_url}")
         try:
             query = {"packages": [{"purl": self.package_url}]}
@@ -842,10 +848,10 @@ class Actionable(Base):
             else:
                 logger.error(f"Error fetching package: {self.package_url} - Error: {response.text}")
                 return
-            conn.commit()
+            s.commit()
         except Exception as e:
             logger.error(f"Error processing package: {self.package_url} - {e}")
-            conn.rollback()
+            s.rollback()
 
     def get_available_versions(self):
         available_versions = list()
@@ -859,12 +865,13 @@ class Actionable(Base):
         return sorted_versions
 
     @classmethod
-    def get_packages_without_versions(cls):
+    def get_packages_without_versions(cls, session=None):
+        s = session or conn
         subquery = select(1).where(
             ActionablePackageAvailableVersion.actionable_id == Actionable.uuid
         )
         query = select(Actionable).where(~exists(subquery))
-        return conn.execute(query).scalars().all()
+        return s.execute(query).scalars().all()
 
     def get_versions_in_use(self, session):
         return list(

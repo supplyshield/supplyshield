@@ -7,9 +7,18 @@ This locks in the public shape of the dict so Sprint 7's CTE consolidation
 (rewriting the 14 serial queries into a single CTE) can be done without
 silently dropping or renaming keys the Jinja template relies on.
 
+The bucket-count tests (``test_compute_statistics_p{0,1,2,3}_count_specific_value``
+and ``test_compute_statistics_total_packages``) lock in the specific count
+values produced by ``_compute_statistics`` for a known seed. Sprint 7 merges
+the four serial P0/P1/P2/P3 queries into a single ``COUNT(*) FILTER (...)``
+aggregate; these assertions catch regressions in that rewrite. Sprint 8 will
+consolidate the remaining 10 of the 14 queries.
+
 Skipped at collection when TEST_DATABASE_URL is unset (see
 tests/integration/conftest.py: collect_ignore_glob).
 """
+
+import pytest
 
 
 # Top-level keys the helper must always return — every one is referenced by
@@ -166,3 +175,186 @@ def test_compute_statistics_zero_counts_on_empty_repository(db_session):
     # organization_stats groups by org, so the seeded repo should show up:
     orgs = {row["organization"] for row in stats["organization_stats"]}
     assert "test-org" in orgs
+
+
+# ---------------------------------------------------------------------------
+# Bucket-count regression tests
+#
+# These tests seed a known dataset and assert specific count values produced
+# by _compute_statistics. They lock in behavior for the SQL rewrite that
+# merges the per-bucket queries into one COUNT(*) FILTER (...) aggregate.
+#
+# EPSS bucket boundaries (preserved verbatim from the helper source):
+#   P0      : epss_score >  0.8                  AND vulns_count > 0
+#   P1      : 0.7 < epss_score <= 0.8            AND vulns_count > 0
+#   P2      : 0.5 < epss_score <= 0.7            AND vulns_count > 0
+#   P3      : epss_score <= 0.5 AND IS NOT NULL  AND vulns_count > 0
+#   no_epss : epss_score IS NULL                 AND vulns_count > 0
+#
+# Pick values comfortably inside each bucket so a future widening of strict-
+# vs-non-strict inequality does not silently shift a row across a boundary:
+#   P0 -> 0.9, P1 -> 0.75, P2 -> 0.6, P3 -> 0.3
+# ---------------------------------------------------------------------------
+
+
+def _seed_package_version(
+    db_session,
+    *,
+    repo,
+    actionable,
+    epss_score,
+    vulns_count,
+    version,
+    scan_status="SUCCESS",
+):
+    """Seed one ActionablePackageAvailableVersion linked to ``repo``.
+
+    Centralizes the four-row insert (Actionable already created by caller →
+    APAV → Repository_APAV link) so each test only has to declare the values
+    that affect bucket placement (epss_score, vulns_count).
+    """
+    from libinv.models import ActionablePackageAvailableVersion
+    from libinv.models import Repository_ActionablePackageAvailableVersion
+
+    apav = ActionablePackageAvailableVersion(
+        scan_status=scan_status,
+        package_url=actionable.package_url,
+        version=version,
+        is_latest=False,
+        vulns_count=vulns_count,
+        epss_score=epss_score,
+        is_version_in_use=True,
+        actionable_id=actionable.uuid,
+    )
+    db_session.add(apav)
+    db_session.flush()
+
+    link = Repository_ActionablePackageAvailableVersion(
+        actionable_package_version_id=apav.uuid,
+        repository_id=repo.id,
+        environment="stage",
+    )
+    db_session.add(link)
+    db_session.flush()
+    return apav
+
+
+@pytest.fixture(scope="function")
+def seeded_buckets(db_session):
+    """Seed a deterministic mix of packages across every EPSS bucket.
+
+    Returns a dict ``{"p0": N0, "p1": N1, "p2": N2, "p3": N3,
+    "no_epss": N4, "total": N0+N1+N2+N3+N4}`` of the expected counts so the
+    individual bucket tests can stay tiny.
+
+    Counts are intentionally distinct (2/3/4/5/1) so a swap-bug (e.g. P1
+    counted as P2) shows up loudly in an assertion diff.
+    """
+    from libinv.models import Actionable
+    from libinv.models import Repository
+
+    repo = Repository(
+        name="bucket-test-repo",
+        org="test-org",
+        provider="github.com",
+        is_public=False,
+        pod="test-pod",
+    )
+    db_session.add(repo)
+    db_session.flush()
+
+    actionable = Actionable(package_url="pkg:pypi/test-bucket-pkg")
+    db_session.add(actionable)
+    db_session.flush()
+
+    expected = {"p0": 2, "p1": 3, "p2": 4, "p3": 5, "no_epss": 1}
+    # Per-bucket EPSS values picked to land comfortably inside the bucket
+    # range — never on a boundary edge (0.5 / 0.7 / 0.8).
+    bucket_scores = {
+        "p0": 0.9,
+        "p1": 0.75,
+        "p2": 0.6,
+        "p3": 0.3,
+        "no_epss": None,
+    }
+
+    version_counter = 0
+    for bucket, count in expected.items():
+        for _ in range(count):
+            version_counter += 1
+            _seed_package_version(
+                db_session,
+                repo=repo,
+                actionable=actionable,
+                epss_score=bucket_scores[bucket],
+                vulns_count=2,  # any positive int; bucket gating is by EPSS.
+                version=f"1.0.{version_counter}",
+            )
+
+    expected["total"] = sum(expected.values())
+    return expected
+
+
+def test_compute_statistics_p0_count_specific_value(db_session, seeded_buckets):
+    """Seeded P0 rows (epss_score > 0.8, vulns_count > 0) are counted as p0_packages."""
+    from libinv.api.actionable.statistics import _compute_statistics
+
+    stats = _compute_statistics(db_session)
+    assert stats["package_stats"]["p0_packages"] == seeded_buckets["p0"]
+
+
+def test_compute_statistics_p1_count_specific_value(db_session, seeded_buckets):
+    """Seeded P1 rows (0.7 < epss_score <= 0.8, vulns_count > 0) are counted as p1_packages."""
+    from libinv.api.actionable.statistics import _compute_statistics
+
+    stats = _compute_statistics(db_session)
+    assert stats["package_stats"]["p1_packages"] == seeded_buckets["p1"]
+
+
+def test_compute_statistics_p2_count_specific_value(db_session, seeded_buckets):
+    """Seeded P2 rows (0.5 < epss_score <= 0.7, vulns_count > 0) are counted as p2_packages."""
+    from libinv.api.actionable.statistics import _compute_statistics
+
+    stats = _compute_statistics(db_session)
+    assert stats["package_stats"]["p2_packages"] == seeded_buckets["p2"]
+
+
+def test_compute_statistics_p3_count_specific_value(db_session, seeded_buckets):
+    """Seeded P3 rows (0 < epss_score <= 0.5, vulns_count > 0) are counted as p3_packages."""
+    from libinv.api.actionable.statistics import _compute_statistics
+
+    stats = _compute_statistics(db_session)
+    assert stats["package_stats"]["p3_packages"] == seeded_buckets["p3"]
+
+
+def test_compute_statistics_no_epss_count_specific_value(db_session, seeded_buckets):
+    """Seeded rows with epss_score IS NULL and vulns_count > 0 are counted as no_epss_packages.
+
+    Locked alongside the P0–P3 buckets because the consolidated query in
+    Sprint 7 also folds the no_epss aggregate into the same single statement.
+    """
+    from libinv.api.actionable.statistics import _compute_statistics
+
+    stats = _compute_statistics(db_session)
+    assert stats["package_stats"]["no_epss_packages"] == seeded_buckets["no_epss"]
+
+
+def test_compute_statistics_total_packages(db_session, seeded_buckets):
+    """Total seeded ActionablePackageAvailableVersion rows are reflected in total_packages."""
+    from libinv.api.actionable.statistics import _compute_statistics
+
+    stats = _compute_statistics(db_session)
+    assert stats["package_stats"]["total_packages"] == seeded_buckets["total"]
+    # Every seeded row has vulns_count > 0, so vulnerable_packages == total.
+    assert stats["package_stats"]["vulnerable_packages"] == seeded_buckets["total"]
+    # And the P0+P1+P2+P3+no_epss bucket sum must equal the total — the
+    # consolidated query must keep the buckets a partition of the vulnerable
+    # rows, never double-counting or losing one.
+    bucket_sum = (
+        stats["package_stats"]["p0_packages"]
+        + stats["package_stats"]["p1_packages"]
+        + stats["package_stats"]["p2_packages"]
+        + stats["package_stats"]["p3_packages"]
+        + stats["package_stats"]["no_epss_packages"]
+    )
+    assert bucket_sum == seeded_buckets["total"]
