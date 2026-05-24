@@ -59,9 +59,15 @@ jobs:
         run: |
           make coverage
 
+      # Sprint 30.3 — integration tests are a required gate on PRs.
+      # pytest-postgresql provides an ephemeral DB so the Postgres service
+      # above is redundant in the new path but left in place for now (it
+      # also feeds TEST_DATABASE_URL which the integration conftest still
+      # honors as an explicit override).
       - name: Run integration tests
         run: |
-          make integration-tests
+          . venv/bin/activate
+          pytest tests/integration -v
 
       - name: Generate coverage report
         run: |

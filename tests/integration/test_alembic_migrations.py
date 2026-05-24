@@ -68,13 +68,28 @@ def alembic_env(engine):
     config keys ``libinv.env`` requires at import time (``JAVA_HOME``,
     ``BASE_IMAGE_JAVA_VERSION_MAPPING``, ``JOBS``).
     """
-    url = os.environ["TEST_DATABASE_URL"]
+    # Sprint 30.1: prefer TEST_DATABASE_URL when set (operator override),
+    # otherwise derive the DSN from the session-scoped ``engine`` fixture
+    # (pytest-postgresql ephemeral DB). The engine.url's password is hidden
+    # by default in __str__, so use render_as_string(hide_password=False).
+    url = os.environ.get("TEST_DATABASE_URL") or engine.url.render_as_string(
+        hide_password=False
+    )
 
     # Fresh schema each module run so the migration starts from a known state.
     with engine.connect() as conn:
         conn.execute(text("DROP SCHEMA IF EXISTS libinv CASCADE"))
         conn.execute(text("CREATE SCHEMA libinv"))
         conn.commit()
+
+    # Materialize ORM tables — simulates ``etc/initdb/init.sql`` in
+    # production. ``0001_baseline.py`` is a no-op stamp that assumes the
+    # schema was bootstrapped from init.sql, so subsequent alembic
+    # migrations (``0002_fk_indexes`` and beyond) need tables to exist
+    # before they can reference them.
+    from libinv.base import Base
+
+    Base.metadata.create_all(engine)
 
     env = dict(os.environ)
     env.update(_db_env_from_url(url))

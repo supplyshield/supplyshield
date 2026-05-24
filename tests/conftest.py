@@ -83,6 +83,63 @@ import pytest  # noqa: E402  - intentionally late so env is set first
 from flask import Flask  # noqa: E402
 
 
+# ---------------------------------------------------------------------------
+# pytest-postgresql factories (Sprint 30.1)
+# ---------------------------------------------------------------------------
+# These factories spin an ephemeral Postgres on-demand. They are wired here at
+# the top-level conftest so any test (unit OR integration) can request the
+# ``postgresql`` fixture and get a clean per-test DB. Integration tests still
+# honor an explicit ``TEST_DATABASE_URL`` (see ``tests/integration/conftest.py``);
+# when unset, they will fall back to the pytest-postgresql ephemeral DSN.
+#
+# ``postgresql_proc`` selects an ephemeral port (port=None) and uses /tmp as the
+# unix-socket directory to avoid clashes with system services. The ``postgresql``
+# factory hangs off that proc and gives each test a fresh psycopg2 connection.
+#
+# Import is wrapped in a try/except so the unit-test run stays green even when
+# pytest-postgresql isn't installed yet (e.g. during the requirements bump
+# rollout). When the import fails, the factories simply aren't registered —
+# integration tests still work via the explicit TEST_DATABASE_URL path.
+try:
+    from pytest_postgresql import factories  # noqa: E402
+
+    postgresql_proc = factories.postgresql_proc(port=None, unixsocketdir="/tmp")
+    postgresql = factories.postgresql("postgresql_proc")
+except ImportError:  # pragma: no cover - exercised when dev dep not installed
+    pass
+
+
+@pytest.fixture
+def test_db_url(request):
+    """Yield a Postgres DSN for the duration of a test.
+
+    Resolution order:
+      1. ``TEST_DATABASE_URL`` env var (explicit operator override).
+      2. ``postgresql`` pytest-postgresql fixture (ephemeral DB).
+
+    Tests / integration fixtures should depend on ``test_db_url`` when they
+    need a Postgres connection string and want to work in both CI (ephemeral)
+    and local-with-operator-DB modes.
+    """
+    explicit = os.environ.get("TEST_DATABASE_URL")
+    if explicit:
+        yield explicit
+        return
+
+    # Lazy-request the pytest-postgresql fixture so tests that don't need a DB
+    # don't pay the spin-up cost.
+    pg = request.getfixturevalue("postgresql")
+    # pg is a psycopg2 connection; build a SQLAlchemy-compatible URL from it.
+    info = pg.info
+    user = info.user
+    password = info.password or ""
+    host = info.host or "localhost"
+    port = info.port
+    dbname = info.dbname
+    auth = f"{user}:{password}@" if password else f"{user}@"
+    yield f"postgresql://{auth}{host}:{port}/{dbname}"
+
+
 @pytest.fixture
 def flask_app_client():
     """Yield a Flask test client wired with `register_global_auth`.
