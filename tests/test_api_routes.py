@@ -124,6 +124,7 @@ def test_enumerate_all_routes(client):
         "/healthz",
         "/libinv/sast/<sid>",
         "/libinv/sast/update",
+        "/metrics",
         "/onboard/new_actionable",
         "/readyz",
         "/wasp/",

@@ -8,6 +8,37 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+
+def _parse_bool(value, default: bool) -> bool:
+    """Parse a stringy env-var value into a bool.
+
+    Treats {"1","true","yes","on","y"} (case-insensitive) as True;
+    {"0","false","no","off","n",""} as False. Unrecognized values
+    raise ValueError (fail-loudly during boot, not silently True).
+    """
+    if value is None:
+        return default
+    s = str(value).strip().lower()
+    if s in {"1", "true", "yes", "on", "y"}:
+        return True
+    if s in {"0", "false", "no", "off", "n", ""}:
+        return False
+    raise ValueError(
+        f"Cannot parse {value!r} as bool; "
+        "expected one of 1/0, true/false, yes/no, on/off."
+    )
+
+
+def _parse_csv(value, default: list[str] | None = None) -> list[str]:
+    """Parse a comma-separated env-var value into a list of stripped strings.
+
+    Empty / unset → returns ``default or []``. Whitespace-only items are
+    dropped.
+    """
+    if value is None or value == "":
+        return list(default or [])
+    return [item.strip() for item in str(value).split(",") if item.strip()]
+
 HOME_DIR = os.getenv("HOME_DIR", default=str(Path.home()))
 
 
@@ -38,7 +69,7 @@ JIRA_URL = os.getenv("JIRA_URL")
 JIRA_USER = os.getenv("JIRA_USER")
 JIRA_TOKEN = os.getenv("JIRA_TOKEN")
 
-EXCLUDED_REPOS = os.getenv("EXCLUDED_REPOS", default=[])
+EXCLUDED_REPOS = _parse_csv(os.getenv("EXCLUDED_REPOS"), default=[])
 
 LIBINV_API_TOKEN = os.getenv("LIBINV_API_TOKEN")
 
@@ -48,7 +79,7 @@ DB_USERNAME = os.getenv("DB_USERNAME")
 DB_PASSWORD = os.getenv("DB_PASSWORD")
 DB_STRING = f"postgresql://{DB_USERNAME}:{DB_PASSWORD}@{DB_HOSTNAME}/{DB_NAME}"
 
-IMAGE_SCAN_ENABLED = os.getenv("IMAGE_SCAN_ENABLED", default=False)
+IMAGE_SCAN_ENABLED = _parse_bool(os.getenv("IMAGE_SCAN_ENABLED"), default=False)
 
 JAVA_HOME = json.loads(os.getenv("JAVA_HOME", "{}"))
 BASE_IMAGE_JAVA_VERSION_MAPPING = json.loads(os.getenv("BASE_IMAGE_JAVA_VERSION_MAPPING", "{}"))
