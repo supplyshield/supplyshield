@@ -140,6 +140,35 @@ Required Configuration Variables
    # Go Private Module Configuration (optional)
    GO_PRIVATE=your-go-private-config
 
+**Audit-Driven Environment Variables (Sprints 0-16):**
+
+The following variables were introduced or hardened during the audit-driven
+refactor. Set the required ones before starting the server.
+
+.. code-block:: bash
+
+   # API authentication (REQUIRED for write routes)
+   # Required for any PUT/POST/PATCH/DELETE request (Sprint 0).
+   # The server fail-closes with HTTP 503 if this is unset.
+   # GET routes remain unauthenticated.
+   LIBINV_API_TOKEN=your-long-random-token
+
+   # ScanCode.io HTTP client (optional, opt-in)
+   # When "true", libinv.services.scancodeio_client routes calls through
+   # the REST API instead of direct SQL/ORM reflection (Sprint 15).
+   LIBINV_SCIO_USE_HTTP=false
+
+   # Structured logging (optional)
+   # Set to "json" to emit one JSON object per log line, including a
+   # per-request X-Request-Id field (Sprint 16). Any other value keeps
+   # the default human-readable colorized formatter.
+   LIBINV_LOG_FORMAT=json
+
+   # DB-backed integration tests (optional, only for `make integration-tests`)
+   # SQLAlchemy connection string used by tests under tests/integration/
+   # (Sprint 4). Leave unset to skip them cleanly.
+   TEST_DATABASE_URL=postgresql+psycopg2://user:pass@localhost:5432/libinv_test
+
 Step 3: Setup GitHub App Private Key
 -------------------------------------
 
@@ -372,6 +401,81 @@ The `crons` service automatically runs scheduled jobs configured in `docker-comp
 - **calculate_package_epss**: Calculates package EPSS scores (daily)
 
 These jobs run automatically and don't require manual intervention.
+
+🏗️ Architecture
+^^^^^^^^^^^^^^^
+
+Top-level layout of the codebase after the Sprint 0-16 refactor:
+
+- ``libinv/`` — main application package (models, helpers, env, daemon entry).
+- ``libinv/api/`` — Flask web application. The old 1218-LOC ``actionable.py``
+  god-route was split into the ``libinv/api/actionable/`` blueprint package
+  (``dashboards.py``, ``repositories.py``, ``statistics.py``,
+  ``package_details.py``, ``package_scan.py``) during Sprint 3. Global
+  ``X-API-Token`` auth (Sprint 0) and the ``X-Request-Id`` middleware
+  (Sprint 16) are wired in ``libinv/api/app.py``.
+- ``libinv/services/`` — service layer extracted from ``models.py``.
+  ``issue_reporter.py`` renders GitHub issue content (Sprint 2);
+  ``scancodeio_client.py`` is the HTTP client for ScanCode.io introduced
+  in Sprints 14-15.
+- ``libinv/scanners/`` — image and repository scanners.
+
+  * ``image_scanner/`` — ECR / SBOM / SCA / base-image pipelines.
+  * ``repository_scanner/`` — ``bridge.py`` SQS handler and supporting code.
+- ``libinv/cli/`` — Click-based CLI entry points
+  (``actionable``, ``daemon``, ``bridge``, ``epss``, ``checkpoint``, etc.).
+- ``alembic/`` — schema migrations. ``versions/0001_baseline.py`` stamps the
+  existing ``init.sql`` schema; ``0002_fk_indexes.py`` adds 17 FK indexes
+  + 2 composite indexes via ``CREATE INDEX CONCURRENTLY`` (Sprint 2).
+- ``tests/`` — DB-free unit tests + doctests (Sprint 3).
+- ``tests/integration/`` — DB-backed integration tests (Sprint 4); gated on
+  ``TEST_DATABASE_URL`` and skipped cleanly when unset.
+
+🧪 Testing
+^^^^^^^^^^
+
+.. code-block:: bash
+
+   # Unit tests + doctests, no database required
+   make tests
+
+   # DB-backed integration tests (requires TEST_DATABASE_URL)
+   make integration-tests
+
+The unit suite (``tests/``) runs under ``coverage`` via ``pytest`` and
+covers helpers, auth, semgrep runner, daemon shutdown, session_scope,
+issue reporter, request-ID middleware, VCS / ECR clients, and the
+ScanCode.io HTTP client.
+
+The integration suite (``tests/integration/``) connects to a real Postgres
+instance and exercises EPSS bulk upsert, session_scope commit/rollback,
+``mark_latest_version`` persistence, N+1 eager-loading guards on the
+actionable dashboard, and statistics aggregation. CI runs both suites
+against a ``postgres:15`` service container (see
+``.github/workflows/coverage.yml``).
+
+🛠️ Development
+^^^^^^^^^^^^^^
+
+Formatting and lint:
+
+.. code-block:: bash
+
+   make valid     # isort + black across the tree
+   make check     # ruff (I001/I002) + black --check (used by CI)
+
+Type checks (Sprint 16, gradual; scope currently limited to
+``libinv/base.py`` and ``libinv/services/``):
+
+.. code-block:: bash
+
+   mypy --config-file pyproject.toml libinv/base.py libinv/services
+
+Database migrations:
+
+.. code-block:: bash
+
+   make db        # alembic upgrade head
 
 🏗️ Architecture Diagram
 ^^^^^^^^^^^^^^^^^^^^^^^

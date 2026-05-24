@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import json
 import logging
 import shutil
@@ -39,6 +41,7 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import PendingRollbackError
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped
+from sqlalchemy.orm import Session as OrmSession
 from sqlalchemy.orm import declarative_mixin
 from sqlalchemy.orm import mapped_column
 from sqlalchemy.orm import relationship
@@ -306,7 +309,9 @@ class Repository(Base):
         return self.vcs.clone(self.url, target_dir)
 
     @classmethod
-    def get_by_git_url(cls, git_url, session=None):
+    def get_by_git_url(
+        cls, git_url: str, session: OrmSession | None = None
+    ) -> "Repository | None":
         s = session or conn
         try:
             repo_url = Repository.from_url(git_url)
@@ -325,7 +330,9 @@ class Repository(Base):
         except ModuleNotFoundError:
             return None
 
-    def raise_or_update_sca_issues(self, environment="stage", session=None):
+    def raise_or_update_sca_issues(
+        self, environment: str = "stage", session: OrmSession | None = None
+    ) -> None:
         s = session or conn
         actionables = Actionable.get_actionable_and_secure_versions(s, self.id, environment)
         if not actionables["results"]:
@@ -344,7 +351,13 @@ class Account(Base):
         return self.type == "prod"
 
     @classmethod
-    def ensure_exists(cls, account_id, name=None, account_type="stage", session=None):
+    def ensure_exists(
+        cls,
+        account_id: str,
+        name: str | None = None,
+        account_type: str = "stage",
+        session: OrmSession | None = None,
+    ) -> None:
         """
         Create Account if it does not exist, nop otherwise
         """
@@ -479,17 +492,17 @@ class Secbug(Base, TimestampMixin):
         return self.deleted_at is None
 
     @classmethod
-    def get(cls, id: str, session=None):
+    def get(cls, id: str, session: OrmSession | None = None) -> "Secbug | None":
         return cls.all_active(session=session).filter(cls.id == id).first()
 
     @classmethod
-    def get_any(cls, id: str, session=None):
+    def get_any(cls, id: str, session: OrmSession | None = None) -> "Secbug | None":
         """Return secbug with given id, even if deleted"""
         s = session or conn
         return s.query(cls).filter(cls.id == id).first()
 
     @classmethod
-    def all_active(cls, session=None):
+    def all_active(cls, session: OrmSession | None = None):
         s = session or conn
         return s.query(cls).filter(cls.deleted_at == None)  # noqa: E711
 
@@ -549,7 +562,9 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
         return f"{self.uuid}"
 
     @classmethod
-    def eat_caterpillar_message(cls, message: dict, session=None):
+    def eat_caterpillar_message(
+        cls, message: dict, session: OrmSession | None = None
+    ) -> "Wasp | None":
         """
         Messages must be sent in the following format:
 
@@ -773,7 +788,12 @@ class Actionable(Base):
     )
 
     @classmethod
-    def populate(cls, repository_id=None, environment=None, session=None):
+    def populate(
+        cls,
+        repository_id: int | None = None,
+        environment: str | None = None,
+        session: OrmSession | None = None,
+    ) -> None:
         actionable_purls = cls.get_actionable_for(repository_id, environment)
         for purl in actionable_purls:
             purl_name = f"pkg:{purl.type}/{purl.namespace}/{purl.name}"
@@ -804,7 +824,7 @@ class Actionable(Base):
                 session.add(actionable)
                 session.commit()
 
-    def fetch_and_store_versions(self, session=None):
+    def fetch_and_store_versions(self, session: OrmSession | None = None) -> None:
         s = session or conn
         logger.info(f"Processing: {self.package_url}")
         try:
@@ -870,7 +890,7 @@ class Actionable(Base):
         return sorted_versions
 
     @classmethod
-    def get_packages_without_versions(cls, session=None):
+    def get_packages_without_versions(cls, session: OrmSession | None = None):
         s = session or conn
         subquery = select(1).where(
             ActionablePackageAvailableVersion.actionable_id == Actionable.uuid
@@ -886,7 +906,7 @@ class Actionable(Base):
             .all()
         )
 
-    def get_safe_versions(self, session=None):
+    def get_safe_versions(self, session: OrmSession | None = None):
         # Prefer eagerly-loaded relationship to avoid N+1 round trips when
         # the caller pre-loaded `available_versions` (e.g. via selectinload
         # in `get_actionable_and_secure_versions`). `"available_versions" in
@@ -922,7 +942,9 @@ class Actionable(Base):
 
         return versions[start_index : end_index + 1]
 
-    def find_safe_version_in(self, list_of_versions, session=None):
+    def find_safe_version_in(
+        self, list_of_versions, session: OrmSession | None = None
+    ) -> None:
         s = session or conn
         logger.info(f"Finding closest safe version for : {self.package_url}")
 
@@ -957,7 +979,9 @@ class Actionable(Base):
 
         s.commit()
 
-    def get_latest(self, session=None):
+    def get_latest(
+        self, session: OrmSession | None = None
+    ) -> "ActionablePackageAvailableVersion | None":
         # Prefer eagerly-loaded relationship to avoid N+1 round trips.
         # See `get_safe_versions` for the `__dict__` sentinel rationale.
         if "available_versions" in self.__dict__:
@@ -1276,7 +1300,9 @@ class ActionablePackageAvailableVersion(Base):
         with session_scope() as session:
             return session.query(cls).filter(cls.is_version_in_use == True).all()
 
-    def scan_and_update_results(self, session=None, is_rescan=False):
+    def scan_and_update_results(
+        self, session: OrmSession | None = None, is_rescan: bool = False
+    ) -> None:
         """ "
         The function triggers a scan for the package and updates the results.
         """

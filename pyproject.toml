@@ -48,6 +48,7 @@ dev = [
 python_version = "3.12"
 files = [
     "libinv/base.py",
+    "libinv/models.py",
     "libinv/services",
 ]
 follow_imports = "silent"
@@ -63,3 +64,14 @@ no_implicit_optional = true
 # focused on actual type bugs in libinv code until Sprint 17 decides whether
 # to add stub packages.
 disable_error_code = ["import-untyped"]
+
+# Sprint 17: models.py has Sprint-0-16 public-API annotations on a handful of
+# methods, but the rest of the file is still untyped. We include it in
+# ``files`` so newly-added hints are checked, but silence the noisiest
+# categories that fire on legacy untyped surfaces (SQLAlchemy declarative
+# attributes, dynamically-assigned ``self._session``, etc). When Sprint 18+
+# broadens coverage, remove entries from ``disable_error_code`` here.
+[[tool.mypy.overrides]]
+module = "libinv.models"
+disallow_untyped_defs = false
+disable_error_code = ["return-value", "assignment", "var-annotated", "attr-defined", "misc"]
