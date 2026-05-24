@@ -1,5 +1,6 @@
 import logging
 import os
+import shlex
 import subprocess
 import time
 import uuid
@@ -26,9 +27,14 @@ def execute_command(command, timeout):
         try:
             env = dict(os.environ)
             env["LIBINV_REQUEST_ID"] = job_id
+            # Sprint 47.1: shell=False + shlex.split closes the audit's
+            # last S0 finding. JOBS values must be plain argv-shaped command
+            # strings — no shell metacharacters (|, &&, $VAR, etc.). If a
+            # cron job needs shell features, wrap it in a small etc/ script
+            # and call that script's path here.
             process = subprocess.Popen(
-                command,
-                shell=True,
+                shlex.split(command),
+                shell=False,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,  # Merge stderr with stdout for real-time output
                 universal_newlines=True,
