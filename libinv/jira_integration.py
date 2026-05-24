@@ -77,7 +77,7 @@ class JiraProject:
         for field in self.jira.fields():
             try:
                 if field["scope"]["project"]["id"] == self.id:
-                    print(f"{field['id']}: {field['name']}")
+                    logger.info("%s: %s", field["id"], field["name"])
             except KeyError:
                 pass
         return None

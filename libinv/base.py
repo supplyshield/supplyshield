@@ -1,19 +1,26 @@
+from __future__ import annotations
+
 import warnings
 from contextlib import contextmanager
+from typing import Any
+from typing import ClassVar
+from typing import Iterator
 
 import sqlalchemy as db
 from sqlalchemy import MetaData
 from sqlalchemy import Table  # noqa: F401  re-exported for callers
+from sqlalchemy.engine import Engine
 from sqlalchemy.ext.declarative import declarative_base
+from sqlalchemy.orm import Session as OrmSession
 from sqlalchemy.orm import scoped_session
 from sqlalchemy.orm import sessionmaker
 
 from libinv.env import DB_STRING
 
-engine = db.create_engine(DB_STRING, pool_pre_ping=True)
-Session = sessionmaker(bind=engine)
+engine: Engine = db.create_engine(DB_STRING, pool_pre_ping=True)
+Session: sessionmaker = sessionmaker(bind=engine)
 
-ScopedSession = scoped_session(Session)
+ScopedSession: scoped_session = scoped_session(Session)
 
 
 class _ConnDeprecationProxy:
@@ -30,12 +37,13 @@ class _ConnDeprecationProxy:
     warning fires once per process to avoid log spam.
     """
 
-    _warned = False
+    _warned: ClassVar[bool] = False
+    _target: Any
 
-    def __init__(self, target):
+    def __init__(self, target: Any) -> None:
         self._target = target
 
-    def _warn_once(self):
+    def _warn_once(self) -> None:
         if not _ConnDeprecationProxy._warned:
             _ConnDeprecationProxy._warned = True
             warnings.warn(
@@ -45,15 +53,15 @@ class _ConnDeprecationProxy:
                 stacklevel=3,
             )
 
-    def __getattr__(self, name):
+    def __getattr__(self, name: str) -> Any:
         self._warn_once()
         return getattr(self._target, name)
 
-    def __call__(self, *args, **kwargs):
+    def __call__(self, *args: Any, **kwargs: Any) -> Any:
         self._warn_once()
         return self._target(*args, **kwargs)
 
-    def __bool__(self):
+    def __bool__(self) -> bool:
         # Used by `s = session or conn` -- must not warn on `bool(conn)`
         # because that's the explicit fallback case Sprint 0-12 left in
         # place. Return True so `or conn` resolves to `conn` itself
@@ -79,7 +87,7 @@ metadata = MetaData()
 
 
 @contextmanager
-def session_scope():
+def session_scope() -> Iterator[OrmSession]:
     """Yield a thread-scoped Session for explicit-lifecycle code.
 
     Commits on clean exit, rolls back on exception, and removes the thread's

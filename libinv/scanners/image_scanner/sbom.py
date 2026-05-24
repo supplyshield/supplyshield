@@ -85,7 +85,7 @@ def parse_sbom_with_image_tar(
         session.commit()
         ts1 = datetime.datetime.now()
         logger.debug(f"in db {ts1 - ts0}")
-        print("[+] SBOM: pushing to DB done")
+        logger.info("SBOM: pushing to DB done")
 
     except OperationalError:
         # This happens when there's a deadlock

@@ -35,3 +35,31 @@ libinv = { workspace = true }
 dev = [
     "libinv",
 ]
+
+# Sprint 16: gradual typing — scoped to recently-restructured public APIs only.
+# Sprint 17 will broaden coverage and wire mypy into CI. Configuration lives
+# here (not mypy.ini) so all tool config sits in pyproject.toml.
+#
+# ``follow_imports = silent`` is the gradual-typing escape hatch: mypy still
+# resolves the imports in libinv/base.py / libinv/services/ (so it can use
+# their stubs), but it does NOT emit errors for modules outside ``files``.
+# This is the only way ``files = [...]`` actually limits the report.
+[tool.mypy]
+python_version = "3.12"
+files = [
+    "libinv/base.py",
+    "libinv/services",
+]
+follow_imports = "silent"
+ignore_missing_imports = true
+strict_optional = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+disallow_untyped_defs = false
+no_implicit_optional = true
+# ``import-untyped`` fires for installed packages without stubs (e.g. requests
+# without types-requests). ``ignore_missing_imports`` only silences
+# ``import-not-found``; suppressing the untyped variant keeps the report
+# focused on actual type bugs in libinv code until Sprint 17 decides whether
+# to add stub packages.
+disable_error_code = ["import-untyped"]

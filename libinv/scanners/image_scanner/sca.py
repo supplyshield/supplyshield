@@ -89,7 +89,7 @@ def parse_sca_with_image(session: OrmSession, sca_filename: str, image: Image):
         session.commit()
         ts1 = datetime.datetime.now()
         logger.debug(f"in db {ts1 - ts0}")
-        print("[+] SCA: pushing to DB done")
+        logger.info("SCA: pushing to DB done")
     except OperationalError:
         # This happens when there's a deadlock
         session.rollback()

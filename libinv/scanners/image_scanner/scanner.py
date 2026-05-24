@@ -61,8 +61,11 @@ def scan_ecr_image(image_name, image_digest, account_id, credentials=None):
 
 def scan_image_index(image_index: ImageIndex, account_id: str):
     for image_tar in image_index.pull_images_if_not_exist():
-        print(
-            f"[#] Processing {image_tar}, Size: {image_tar.size}, Fresh: {image_tar.freshly_pulled}"
+        logger.info(
+            "Processing %s, Size: %s, Fresh: %s",
+            image_tar,
+            image_tar.size,
+            image_tar.freshly_pulled,
         )
         sbom_filename = generate_sbom_for_image_tar(image_tar)
         with session_scope() as session:

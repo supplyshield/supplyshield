@@ -645,7 +645,7 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
         """
         if not hasattr(self, "_project_dir"):
             self._project_dir = Path(self.cwd, self.uuid)
-            print(self._project_dir)
+            logger.debug("project_dir: %s", self._project_dir)
             self._project_dir.mkdir(exist_ok=True, parents=True)
 
         return self._project_dir
@@ -668,7 +668,7 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
         Path(target_dir).mkdir(exist_ok=True)
         repo = None
         try:
-            print("Trying to clone now..", flush=True)
+            logger.info("Trying to clone now..")
             repo = repository.clone(target_dir)
             if repo is None:
                 raise ValueError(f"repository.clone() returned None for {repository.url}")
@@ -1318,7 +1318,7 @@ class ActionablePackageAvailableVersion(Base):
             response = request_session.post(
                 projects_api_url, data=project_data, files=files, timeout=300
             )
-            print(projects_api_url)
+            logger.debug("projects_api_url: %s", projects_api_url)
             logger.debug(f"Scancodeio response: {response.text}")
 
             self.scan_output = response.text

@@ -10,10 +10,12 @@ from libinv.api.auth import register_global_auth
 from libinv.api.compare_builds import compare_builds
 from libinv.api.graph import blastradius
 from libinv.api.onboard_package import onboard_package
+from libinv.api.request_id import register_request_id
 from libinv.api.wasp import wasp
 from libinv.base import ScopedSession
 from libinv.base import conn
 from libinv.env import API_DOCS_FOLDER
+from libinv.logger import install_json_formatter_if_configured
 from libinv.models import SastResult
 from libinv.scanners.repository_scanner.sast.enums.ValidEnum import ValidEnum
 
@@ -26,6 +28,8 @@ app.register_blueprint(wasp, url_prefix="/wasp")
 app.register_blueprint(compare_builds, url_prefix="/compare")
 
 register_global_auth(app)
+install_json_formatter_if_configured()
+register_request_id(app)
 
 
 @app.teardown_request

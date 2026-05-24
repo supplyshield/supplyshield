@@ -9,6 +9,13 @@ Note: This module preserves the exact rendering semantics of the original
 including any URL path inconsistencies between the priority sections.
 """
 
+from __future__ import annotations
+
+from typing import Any
+from typing import Dict
+from typing import List
+from typing import Tuple
+
 from packageurl import PackageURL
 
 from libinv.env import LIBINV_SERVER
@@ -20,7 +27,10 @@ _TABLE_HEADER = (
 )
 
 
-def _render_actionable_table(action_items, url_path):
+def _render_actionable_table(
+    action_items: List[Dict[str, Any]],
+    url_path: str,
+) -> str:
     """Render the rows of a Package / Current Version / Suggested Versions table.
 
     :param action_items: list of action-item dicts (each has
@@ -54,7 +64,7 @@ def _render_actionable_table(action_items, url_path):
     return rows
 
 
-def prepare_git_issue_content(result):
+def prepare_git_issue_content(result: Dict[str, Any]) -> Tuple[str, str]:
     """Render the title and markdown body for an Actionable's GitHub issue.
 
     Mirrors ``Actionable.prepare_git_issue_content`` — returns a

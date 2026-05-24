@@ -70,7 +70,7 @@ def detect_and_update_base_image(session: OrmSession, image: Image):
     image.base_image_id = base_image.id
     session.add(image)
     session.commit()
-    print(f"[+] base image updated for: {image} to {base_image}")
+    logger.info("base image updated for: %s to %s", image, base_image)
     return True
 
 

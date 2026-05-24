@@ -35,10 +35,10 @@ import logging
 import os
 from typing import Any
 from typing import Dict
-from typing import Iterable
 from typing import Iterator
 from typing import List
 from typing import Optional
+from typing import Set
 from typing import TypedDict
 
 import requests
@@ -387,7 +387,7 @@ class ScancodeioClient:
         TODO(server-endpoint): could be a single
         ``GET /api/projects/<uuid>/cves/`` call upstream.
         """
-        seen: set = set()
+        seen: Set[str] = set()
         for pkg in self.iter_discovered_packages(
             project_uuid, only_vulnerable=True
         ):
