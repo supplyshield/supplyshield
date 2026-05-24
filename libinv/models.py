@@ -1006,35 +1006,85 @@ class Actionable(Base):
         environment: str | None = None,
         session: OrmSession | None = None,
     ) -> None:
+        """Bulk-insert Actionable + ActionablePackageAvailableVersion rows.
+
+        Sprint 38.2: replaced the per-purl ``get_or_create`` + commit-in-loop
+        pattern with two ``INSERT ... ON CONFLICT DO NOTHING`` statements:
+        one for the Actionable parent rows (conflict on ``package_url``)
+        and one for the version child rows (conflict on the
+        ``uq_package_version`` constraint of ``(package_url, version)``).
+        A single ``session.commit()`` is issued after the bulk operation.
+        """
         actionable_purls = cls.get_actionable_for(repository_id, environment)
+
+        # Stage 1: assemble parent + child rows in-memory, skipping blacklisted
+        # purls. We need a stable uuid per parent so the child row's FK can
+        # reference it deterministically; we mint it here rather than relying
+        # on a server-side default because the child INSERT runs in the same
+        # statement batch as the parent and cannot read back generated PKs
+        # without an extra round-trip.
+        from uuid import uuid4 as _uuid4
+
+        actionable_rows: list[dict] = []
+        version_rows: list[dict] = []
+        # purl_name -> uuid map deduplicates parents within the batch so two
+        # purls that share a package_url use the SAME actionable_id for their
+        # version children.
+        purl_to_uuid: dict[str, str] = {}
+
         for purl in actionable_purls:
             purl_name = f"pkg:{purl.type}/{purl.namespace}/{purl.name}"
             if is_blacklist(purl_name):
                 logger.debug(f"Blacklisted package: {purl_name}")
                 continue
 
-            with session_scope() as session:
-                available_versions = (
-                    session.query(ActionablePackageAvailableVersion.version)
-                    .filter(ActionablePackageAvailableVersion.package_url == purl_name)
-                    .all()
+            if purl_name not in purl_to_uuid:
+                new_uuid = str(_uuid4())
+                purl_to_uuid[purl_name] = new_uuid
+                actionable_rows.append(
+                    {"uuid": new_uuid, "package_url": purl_name}
                 )
-                available_versions = [v[0] for v in available_versions]
 
-                actionable, _ = get_or_create(session, Actionable, package_url=purl_name)
-                if purl.version not in available_versions:
-                    get_or_create(
-                        session,
-                        ActionablePackageAvailableVersion,
-                        package_url=purl_name,
-                        version=purl.version,
-                        is_version_in_use=True,
-                        actionable_id=actionable.uuid,
-                        scan_status="ADDED",
-                        is_latest=False,
-                    )
-                session.add(actionable)
-                session.commit()
+            version_rows.append(
+                {
+                    "uuid": str(_uuid4()),
+                    "package_url": purl_name,
+                    "version": purl.version,
+                    "is_version_in_use": True,
+                    "actionable_id": purl_to_uuid[purl_name],
+                    "scan_status": "ADDED",
+                    "is_latest": False,
+                }
+            )
+
+        if not actionable_rows and not version_rows:
+            return
+
+        # Stage 2: emit at most two INSERT statements, then commit once.
+        # ``on_conflict_do_nothing`` resolves duplicates server-side:
+        #   - Actionable: ``package_url`` is UNIQUE — use it as the index.
+        #   - APAV: composite UNIQUE ``(package_url, version)`` via
+        #     ``uq_package_version``.
+        # Existing rows are left untouched; new rows are inserted atomically.
+        with session_scope() as s:
+            if actionable_rows:
+                act_stmt = pg_insert(Actionable).values(actionable_rows)
+                act_stmt = act_stmt.on_conflict_do_nothing(
+                    index_elements=["package_url"]
+                )
+                s.execute(act_stmt)
+
+            if version_rows:
+                ver_stmt = pg_insert(ActionablePackageAvailableVersion).values(
+                    version_rows
+                )
+                ver_stmt = ver_stmt.on_conflict_do_nothing(
+                    index_elements=["package_url", "version"]
+                )
+                s.execute(ver_stmt)
+
+            # Commit AFTER the bulk operation — not in the loop above.
+            s.commit()
 
     def fetch_and_store_versions(self, session: OrmSession | None = None) -> None:
         s = session or conn
@@ -1064,10 +1114,19 @@ class Actionable(Base):
                     logger.error(f"No available versions found for package: {self.package_url}")
                     return
 
+                # Sprint 38.2: bulk INSERT ... ON CONFLICT DO NOTHING
+                # instead of per-row get_or_create + commit-in-loop. The
+                # unique constraint ``uq_package_version`` on
+                # ``(package_url, version)`` is the conflict target — any
+                # duplicate purl@version we already stored is silently
+                # skipped server-side.
+                from uuid import uuid4 as _uuid4
+
                 results = []
                 for version in new_versions:
                     results.append(
                         {
+                            "uuid": str(_uuid4()),
                             "package_url": self.package_url,
                             "scan_status": "ADDED",
                             "is_latest": False,
@@ -1075,12 +1134,20 @@ class Actionable(Base):
                             "scan_output": None,
                             "actionable_id": self.uuid,
                             "version": version,
+                            "is_version_in_use": False,
                         }
                     )
 
-                with session_scope() as session:
-                    for result in results:
-                        get_or_create(session, ActionablePackageAvailableVersion, **result)
+                if results:
+                    with session_scope() as session:
+                        stmt = pg_insert(ActionablePackageAvailableVersion).values(
+                            results
+                        )
+                        stmt = stmt.on_conflict_do_nothing(
+                            index_elements=["package_url", "version"]
+                        )
+                        session.execute(stmt)
+                        # Commit AFTER the bulk insert — not per-row.
                         session.commit()
             else:
                 logger.error(f"Error fetching package: {self.package_url} - Error: {response.text}")
