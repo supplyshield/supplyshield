@@ -188,6 +188,30 @@ Continuous integration runs from the workflows under
   locally so contributors can run ``pre-commit run --all-files``
   before pushing (Sprint 18).
 
+******************
+Materialized views
+******************
+
+``libinv.sca_actionable_items``
+  Denormalises ``repository_actionable_package_versions_association``
+  joined to ``repositories``, ``wasps``,
+  ``actionable_package_available_versions``, and ``safe_actionable``
+  into one row per actionable finding (one per
+  ``(repository, environment, package, version)``). Defined by alembic
+  revision ``0006_sca_actionable_view`` (Sprint 45.1) and carries a
+  ``UNIQUE INDEX (id)`` derived from the association row's ``uuid``
+  so ``REFRESH … CONCURRENTLY`` is safe.
+
+  Backs the Metabase actionable-package dashboard — Metabase reads the
+  view directly so a single ``SELECT`` replaces the four-table join
+  each question would otherwise emit. ``etc/scripts/metabase_cron.sh``
+  runs ``REFRESH MATERIALIZED VIEW CONCURRENTLY
+  libinv.sca_actionable_items`` on a ``*/15 * * * *`` cadence
+  (Sprint 45.2). Staleness tradeoff: a finding ingested at HH:01
+  becomes visible to Metabase at HH:15 (worst case); shorten the
+  cadence in the host crontab if the dashboard needs to be fresher
+  — the unique index makes CONCURRENTLY safe at any cron tick width.
+
 ************
 Test layout
 ************
