@@ -36,7 +36,7 @@ def safe_upgrades():
                     "scan_status": version.scan_status,
                     "vulnerabilities": version.vulns_count,
                     "epss_score": version.epss_score,
-                    "vulnerability_severities": version.vulnerability_severities_epss,
+                    "vulnerability_severities": version.vulnerability_severities,
                     "is_latest": version.is_latest,
                     "updated_at": version.updated_at,
                 }
