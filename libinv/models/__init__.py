@@ -69,9 +69,10 @@ from libinv.exceptions import MalformedCaterpillarMessage  # noqa: F401
 from libinv.models.package import Package  # noqa: F401
 from libinv.models.package import PackageLicenseAssociation  # noqa: F401
 from libinv.models.actionable import Repository_ActionablePackageAvailableVersion  # noqa: F401
-from libinv.models._legacy import SastLobMetaData  # noqa: F401
-from libinv.models._legacy import SastResult  # noqa: F401
-from libinv.models._legacy import Secbug  # noqa: F401
+# Sprint 41.4: Secbug + SAST classes live in libinv/models/secbug.py + sast.py.
+from libinv.models.sast import SastLobMetaData  # noqa: F401
+from libinv.models.sast import SastResult  # noqa: F401
+from libinv.models.secbug import Secbug  # noqa: F401
 # Sprint 40.2: Vulnerability-domain classes live in libinv/models/vulnerability.py.
 from libinv.models.vulnerability import Vulnerability  # noqa: F401
 from libinv.models.vulnerability import VulnerabilityPackageAssociation  # noqa: F401
