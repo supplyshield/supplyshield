@@ -35,6 +35,7 @@ from sqlalchemy import func
 from sqlalchemy import select
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import PendingRollbackError
 from sqlalchemy.ext.mutable import MutableDict
 from sqlalchemy.orm import Mapped
@@ -50,10 +51,9 @@ if TYPE_CHECKING:
     from typing import Any
 
 from libinv.base import Base
-from libinv.base import Session
 from libinv.base import conn
+from libinv.base import session_scope
 from libinv.env import EXCLUDED_REPOS
-from libinv.env import LIBINV_SERVER
 from libinv.env import LIBINV_TEMP_DIR
 from libinv.env import PURLDB_API_URL
 from libinv.env import SCANCODEIO_API_KEY
@@ -62,6 +62,7 @@ from libinv.exceptions import ConflictingInfoError
 from libinv.exceptions import MalformedCaterpillarMessage
 from libinv.helpers import case_insensitive_dict
 from libinv.helpers import explode_git_url
+from libinv.services import issue_reporter
 try:
     from libinv.scio_models import DiscoveredPackage
 except Exception:  # pragma: no cover - fallback for bootstrap when scanpipe tables missing
@@ -766,7 +767,7 @@ class Actionable(Base):
                 logger.debug(f"Blacklisted package: {purl_name}")
                 continue
 
-            with Session() as session:
+            with session_scope() as session:
                 available_versions = (
                     session.query(ActionablePackageAvailableVersion.version)
                     .filter(ActionablePackageAvailableVersion.package_url == purl_name)
@@ -830,7 +831,7 @@ class Actionable(Base):
                         }
                     )
 
-                with Session() as session:
+                with session_scope() as session:
                     for result in results:
                         get_or_create(session, ActionablePackageAvailableVersion, **result)
                         session.commit()
@@ -844,7 +845,7 @@ class Actionable(Base):
 
     def get_available_versions(self):
         available_versions = list()
-        with Session() as session:
+        with session_scope() as session:
             available_versions = (
                 session.query(ActionablePackageAvailableVersion)
                 .filter(ActionablePackageAvailableVersion.actionable_id == self.uuid)
@@ -956,7 +957,7 @@ class Actionable(Base):
         """
         Mark the maximum version as latest for each actionable package.
         """
-        with Session() as session:
+        with session_scope() as session:
             versions = (
                 session.query(ActionablePackageAvailableVersion)
                 .filter(ActionablePackageAvailableVersion.actionable_id == self.uuid)
@@ -1040,124 +1041,13 @@ class Actionable(Base):
                     return issue["url"], True
         return None, False
 
-    @staticmethod
-    def prepare_git_issue_content(result):
-        title = "[Security] Immediate package upgrades required"
-        msg = """\
-### Following are the packages that require an update
-
-<details>
-  <summary><strong>FAQ's</strong></summary>
-
-  <pre><code>
-1. Why do we need to upgrade these packages?
-
-   The following packages have introduced vulnerabilities in our codebase—either directly or through their dependencies.
-   They are listed below in order of priority.
-
-2. The suggested version upgrades could break the service. What should we do?
-
-   You can click on the suggested version values to open the SupplyShield page. There, you'll find the full list of
-   available versions and can manually trigger a vulnerability scan before upgrading.
-   
-3. I can't find any vulnerabilities in the given package. Doesn't that mean it's safe?
-
-   Our scans also check transitive (child) dependencies. Even if the package itself appears clean, it may be using
-   another package with known vulnerabilities.
-  </code></pre>
-</details>
-
-"""
-        sorted_result = sorted(
-            result["results"], key=lambda x: x["current_version_score"], reverse=True
-        )
-        
-        # Separate P0 issues (epss_score > 0.8) from other issues
-        p0_issues = []
-        other_issues = []
-        
-        for action_item in sorted_result:
-            epss_score = action_item.get("current_version_score")
-            if epss_score is not None and epss_score > 0.8:
-                p0_issues.append(action_item)
-            else:
-                other_issues.append(action_item)
-        
-        # Add P0 issues table if any exist
-        if p0_issues:
-            msg += "### 🚨 Critical Priority (P0)\n\n"
-            msg += "| Package | Current Version | Suggested Versions |\n"
-            msg += "|-------------|----------------|--------------------|\n"
-            
-            for action_item in p0_issues:
-                versions_url = f"{LIBINV_SERVER}/actionable/v3/package_scan?actionable_id={action_item['versionless_id']}&version_in_use={action_item['current_version']}"
-                suggested_versions = action_item["suggested_versions"]
-                pacakge_name = PackageURL.from_string(action_item['full_package_url']).name
-                if not suggested_versions:
-                    suggested_versions = "🔍"
-                else:
-                    suggested_versions = ", ".join(suggested_versions)
-                msg += (
-                    f"| {pacakge_name} "
-                    f"| {action_item['current_version']} "
-                    f"| [{suggested_versions}]({versions_url}) |\n"
-                )
-            msg += "\n"
-        
-        if other_issues:
-            if p0_issues:
-                msg += "<details>\n"
-                msg += "  <summary><strong>Other Priority Issues (P1/P2/P3)</strong></summary>\n\n"
-                msg += "| Package | Current Version | Suggested Versions |\n"
-                msg += "|-------------|----------------|--------------------|\n"
-                
-                for action_item in other_issues:
-                    versions_url = f"{LIBINV_SERVER}/actionable/package_scan?actionable_id={action_item['versionless_id']}&version_in_use={action_item['current_version']}"
-                    suggested_versions = action_item["suggested_versions"]
-                    pacakge_name = PackageURL.from_string(action_item['full_package_url']).name
-                    if not suggested_versions:
-                        suggested_versions = "🔍"
-                    else:
-                        suggested_versions = ", ".join(suggested_versions)
-                    msg += (
-                        f"| {pacakge_name} "
-                        f"| {action_item['current_version']} "
-                        f"| [{suggested_versions}]({versions_url}) |\n"
-                    )
-                msg += "\n</details>\n\n"
-            else:
-                msg += "### All issues\n\n"
-                msg += "| Package | Current Version | Suggested Versions |\n"
-                msg += "|-------------|----------------|--------------------|\n"
-                
-                for action_item in other_issues:
-                    versions_url = f"{LIBINV_SERVER}/actionable/v3/package_scan?actionable_id={action_item['versionless_id']}&version_in_use={action_item['current_version']}"
-                    suggested_versions = action_item["suggested_versions"]
-                    pacakge_name = PackageURL.from_string(action_item['full_package_url']).name
-                    if not suggested_versions:
-                        suggested_versions = "🔍"
-                    else:
-                        suggested_versions = ", ".join(suggested_versions)
-                    msg += (
-                        f"| {pacakge_name} "
-                        f"| {action_item['current_version']} "
-                        f"| [{suggested_versions}]({versions_url}) |\n"
-                    )
-                msg += "\n"
-        
-        if result["commit_id"]:
-            msg += f"\n**Commit ID:** `{result['commit_id']}`\n"
-        if result["jenkins_url"]:
-            msg += f"**Jenkins URL:** {result['jenkins_url']}\n"
-        return title, msg
-
     @classmethod
     def raise_sca_as_issue(cls, repo, actionables):
         """
         Creates an issue in the GitHub repository or updates if the issue already exists.
         """
         issue_url, existing_issue = cls.get_actionables_issue(repo)
-        title, message = cls.prepare_git_issue_content(actionables)
+        title, message = issue_reporter.prepare_git_issue_content(actionables)
 
         if existing_issue:
             repo.vcs.update_issue(
@@ -1231,7 +1121,7 @@ class ActionablePackageAvailableVersion(Base):
         if not self.scancode_project_uuid or DiscoveredPackage is None:
             return 0
 
-        with Session() as session:
+        with session_scope() as session:
             result = (
                 session.query(
                     func.sum(
@@ -1287,7 +1177,7 @@ class ActionablePackageAvailableVersion(Base):
             """
         )
 
-        with Session() as session:
+        with session_scope() as session:
             if self.scancode_project_uuid is None:
                 return None
             result = session.execute(query, {"project_id": self.scancode_project_uuid})
@@ -1313,12 +1203,12 @@ class ActionablePackageAvailableVersion(Base):
 
     @classmethod
     def get_latest_packages(cls):
-        with Session() as session:
+        with session_scope() as session:
             return session.query(cls).filter(cls.is_latest == True).all()
 
     @classmethod
     def get_scan_failed_packages(cls):
-        with Session() as session:
+        with session_scope() as session:
             return (
                 session.query(cls)
                 .filter(cls.vulns_count == None)
@@ -1328,7 +1218,7 @@ class ActionablePackageAvailableVersion(Base):
 
     @classmethod
     def get_packages_in_use(cls):
-        with Session() as session:
+        with session_scope() as session:
             return session.query(cls).filter(cls.is_version_in_use == True).all()
 
     def scan_and_update_results(self, session=None, is_rescan=False):
@@ -1673,6 +1563,9 @@ class EPSS(Base):
 
             batch_size = 100
             for i in range(0, len(to_fetch), batch_size):
+                if i > 0:
+                    # Polite rate-limit between batches against the public EPSS API.
+                    time.sleep(0.5)
                 batch = to_fetch[i : i + batch_size]
                 cve_string = ",".join(batch)
                 try:
@@ -1714,31 +1607,36 @@ class EPSS(Base):
 
     @classmethod
     def update_epss_scores(cls, session, epss_data_dict):
+        """Bulk-upsert EPSS scores via INSERT ... ON CONFLICT DO UPDATE.
+
+        One round trip per batch instead of one SELECT + one INSERT/UPDATE
+        per CVE.
         """
-        Update or insert EPSS scores from a dictionary of CVE -> data mappings
-        """
+        if not epss_data_dict:
+            return
+
         now = datetime.now(timezone.utc)
-
-        for cve_id, data in epss_data_dict.items():
-            existing = session.query(cls).filter(cls.cve == cve_id).first()
-
-            if existing:
-                # Update existing record
-                existing.epss_score = data["epss_score"]
-                existing.epss_percentile = data["epss_percentile"]
-                existing.epss_date = data["epss_date"]
-                existing.updated_at = now
-            else:
-                # Create new record
-                new_record = cls(
-                    cve=cve_id,
-                    epss_score=data["epss_score"],
-                    epss_percentile=data["epss_percentile"],
-                    epss_date=data["epss_date"],
-                    updated_at=now,
-                )
-                session.add(new_record)
-
+        rows = [
+            {
+                "cve": cve_id,
+                "epss_score": data["epss_score"],
+                "epss_percentile": data["epss_percentile"],
+                "epss_date": data["epss_date"],
+                "updated_at": now,
+            }
+            for cve_id, data in epss_data_dict.items()
+        ]
+        stmt = pg_insert(cls).values(rows)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=[cls.cve],
+            set_={
+                "epss_score": stmt.excluded.epss_score,
+                "epss_percentile": stmt.excluded.epss_percentile,
+                "epss_date": stmt.excluded.epss_date,
+                "updated_at": stmt.excluded.updated_at,
+            },
+        )
+        session.execute(stmt)
         session.commit()
 
 
