@@ -688,6 +688,14 @@ worth tracking. They are listed here to keep the audit trail honest.
 
 ## [Unreleased] — Sprints 33-52 (post-audit remediation, in flight)
 
+### Dependency hygiene (Sprint 53.5)
+
+- **Sprint 53.5 — confirmed no `mysqlclient` / `psycopg2` (non-binary) /
+  `MySQL-python` / `PyMySQL` stragglers remain in `requirements.txt`,
+  `setup.cfg`, or `pyproject.toml` after the Sprint 18 cleanup. Only
+  `psycopg2-binary` (the modern variant) is present, which is the
+  intended state.
+
 ### Schema discipline (Sprints 33-34)
 
 - **Alembic index parity audit (Sprint 33)** — every `Index(...)`
