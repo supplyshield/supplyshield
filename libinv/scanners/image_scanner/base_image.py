@@ -1,7 +1,7 @@
 import json
 import logging
 from tarfile import TarFile
-from typing import List
+from typing import Iterable
 
 from sqlalchemy import and_
 from sqlalchemy.orm import Session as OrmSession
@@ -16,6 +16,11 @@ from libinv.scanners.image_scanner.logger import logger
 def save_layer_information_for_image(session: OrmSession, image: Image, image_tar: ImageTarBall):
     tf = TarFile(image_tar.filename)
     file = tf.extractfile("manifest.json")
+    # Sprint 50.3: ``extractfile`` returns ``IO[bytes] | None``; raise loud and
+    # early if the image tarball is missing its manifest (the rest of this path
+    # already assumes manifest.json is present, see ValueError below).
+    if file is None:
+        raise ValueError(f"manifest.json missing from {image_tar.filename}")
     manifest = json.load(file)
 
     if len(manifest) != 1:
@@ -74,7 +79,7 @@ def detect_and_update_base_image(session: OrmSession, image: Image):
     return True
 
 
-def detect_parent_image(image: Image, candidates: List):
+def detect_parent_image(image: Image, candidates: Iterable[Image]):
     matching_layer_images = []
     for candidate in candidates:
         logger.debug(f"Trying candidate: {candidate}")

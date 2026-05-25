@@ -98,7 +98,9 @@ def connect_using_queue_message_agreement(wasp: Wasp, *, session):
         try:
             # Sprint 48.1: ``session`` is required keyword-only.
             s = session
-            message = json.loads(wasp.raw_message)
+            # Sprint 50.3: SQLAlchemy Column[str] at runtime exposes ``str``;
+            # mypy sees the unbound Column descriptor type, so ignore arg-type here.
+            message = json.loads(wasp.raw_message)  # type: ignore[arg-type]
 
             for ecr_image in message["ecr_image"]:
                 if ecr_image["type"] == "ImageIndex":

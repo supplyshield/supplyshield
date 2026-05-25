@@ -143,7 +143,9 @@ disable_error_code = ["import-untyped"]
 [[tool.mypy.overrides]]
 module = ["libinv.models", "libinv.models.*"]
 disallow_untyped_defs = false
-disable_error_code = ["attr-defined", "misc"]
+# Sprint 50.2: dropped "attr-defined" — libinv/models is now properly annotated.
+# Sprint 50.3: dropped "misc" — libinv/models survives a strict misc check.
+disable_error_code = []
 
 # Sprint 18: expand scope to libinv/api and libinv/scanners. These packages are
 # largely untyped today; we run mypy over them to catch *future* regressions but
@@ -153,10 +155,12 @@ disable_error_code = ["attr-defined", "misc"]
 [[tool.mypy.overrides]]
 module = ["libinv.api.*", "libinv.scanners.*", "libinv.cli.*"]
 disallow_untyped_defs = false
+# Sprint 50.3: dropped "arg-type" — peeled in favour of per-call-site
+# ``# type: ignore[arg-type]`` markers (or proper fixes) where untyped legacy
+# call surfaces still leak. Remaining codes pending future sprints.
 disable_error_code = [
     "return-value",
     "assignment",
     "var-annotated",
     "attr-defined",
-    "arg-type",
 ]

@@ -70,7 +70,11 @@ from libinv.models.package import Package  # noqa: F401
 from libinv.models.package import PackageLicenseAssociation  # noqa: F401
 from libinv.models.actionable import RepositoryActionablePackageAvailableVersion  # noqa: F401
 # Deprecated alias — remove in a future cleanup once all internal callers migrate.
-Repository_ActionablePackageAvailableVersion = RepositoryActionablePackageAvailableVersion  # noqa: N816
+# Sprint 50.3: alias is now sourced from ``libinv.models._legacy`` (re-exported via
+# the star-import on line 30); the duplicate assignment here was tripping mypy
+# under strict ``misc`` because it rebound an already-imported name without a
+# ``type[...]`` annotation. Both import paths still resolve to the same class.
+from libinv.models._legacy import Repository_ActionablePackageAvailableVersion  # noqa: F401,N816
 # Sprint 41.4: Secbug + SAST classes live in libinv/models/secbug.py + sast.py.
 from libinv.models.sast import SastLobMetaData  # noqa: F401
 from libinv.models.sast import SastResult  # noqa: F401
