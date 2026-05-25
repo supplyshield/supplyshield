@@ -40,6 +40,7 @@ from sqlalchemy import Index
 from sqlalchemy import String
 from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import SQLAlchemyError
 
 from libinv.base import Base
 
@@ -150,7 +151,12 @@ class EPSS(Base):
                         if logger:
                             logger.error(f"API error: {response.status_code} {response.text}")
                         failed += len(batch)
-                except Exception as e:
+                except (requests.RequestException, ValueError, SQLAlchemyError) as e:
+                    # Sprint 47.2: narrowed from `except Exception`. Sources:
+                    # * ``requests.get`` -> requests.RequestException
+                    # * ``response.json()`` / ``float(...)`` -> ValueError
+                    # * ``cls.update_epss_scores`` -> SQLAlchemyError on
+                    #   the pg_insert / session.execute path.
                     if logger:
                         logger.error(f"Error fetching EPSS data: {e}")
                     failed += len(batch)

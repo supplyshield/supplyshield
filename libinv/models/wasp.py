@@ -30,6 +30,8 @@ from pathlib import Path
 from uuid import uuid4
 
 from git.exc import GitCommandError
+from jsonschema import SchemaError
+from jsonschema import ValidationError
 from jsonschema import validate
 from sqlalchemy import Boolean
 from sqlalchemy import Column
@@ -104,7 +106,11 @@ def is_valid_raw_message(message):
     try:
         validate(instance=message, schema=schema)
         return True
-    except Exception as e:
+    except (ValidationError, SchemaError) as e:
+        # Sprint 47.2: narrowed from `except Exception`. ``validate``
+        # raises ``ValidationError`` for instance/schema mismatch and
+        # ``SchemaError`` for malformed schemas — there are no other
+        # documented failure paths.
         logger.error(f"Invalid wasp message: {e}")
         return False
 
@@ -329,7 +335,14 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
             logger.error(e)
             self.throw(f"failed to clone repository: {repository.url}")
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001
+            # Sprint 47.2: narrowing deferred — multi-source error path
+            # (gitpython internals can surface OSError, ValueError,
+            # InvalidGitRepositoryError, NoSuchPathError as well as
+            # filesystem failures from ``Path.mkdir``). Kept broad as a
+            # last-resort guard that still re-raises after recording the
+            # failure on the wasp row; reviewer to triage if a tighter
+            # union is appropriate.
             logger.error(f"Unexpected error during clone: {e}")
             self.throw(f"failed to clone repository: {repository.url} - {str(e)}")
             raise

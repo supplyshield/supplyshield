@@ -44,6 +44,7 @@ from sqlalchemy import select
 from sqlalchemy import text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import Session as OrmSession
 from sqlalchemy.orm import relationship
 from sqlalchemy.orm import selectinload
@@ -60,7 +61,11 @@ from libinv.services import issue_reporter
 
 try:
     from libinv.scio_models import DiscoveredPackage
-except Exception:  # pragma: no cover - fallback for bootstrap when scanpipe tables missing
+except SQLAlchemyError:  # pragma: no cover - fallback for bootstrap when scanpipe tables missing
+    # Sprint 47.2: narrowed from `except Exception`. The only failure
+    # mode for ``libinv.scio_models`` import is the SQLAlchemy reflection
+    # call (``inspect(engine).has_table``) when scanpipe tables are
+    # missing or the SCIO DB is unreachable.
     DiscoveredPackage = None
 
 if TYPE_CHECKING:
@@ -256,7 +261,12 @@ class Actionable(Base):
                 logger.error(f"Error fetching package: {self.package_url} - Error: {response.text}")
                 return
             s.commit()
-        except Exception as e:
+        except (requests.RequestException, SQLAlchemyError, ValueError) as e:
+            # Sprint 47.2: narrowed from `except Exception`. Sources:
+            # * ``requests.post`` -> requests.RequestException
+            # * ``response.json()`` -> ValueError (JSONDecodeError subclass)
+            # * ``PackageURL.from_string`` -> ValueError on malformed purl
+            # * ``pg_insert`` / ``session.commit`` -> SQLAlchemyError
             logger.error(f"Error processing package: {self.package_url} - {e}")
             s.rollback()
 
@@ -604,13 +614,20 @@ class ActionablePackageAvailableVersion(Base):
         if not self.scancode_project_uuid:
             return 0
 
+        from libinv.services.scancodeio import ScancodeioError
         from libinv.services.scancodeio_client import get_default_client
 
         http_client = get_default_client()
         if http_client is not None:
             try:
                 return http_client.get_vulnerability_count(self.scancode_project_uuid)
-            except Exception as exc:
+            except (ScancodeioError, requests.RequestException) as exc:
+                # Sprint 47.2: narrowed from `except Exception`. The HTTP
+                # client wraps all transport failures (4xx/5xx, timeouts,
+                # connection errors) as ``ScancodeioError`` /
+                # ``ScancodeioNotFound`` via _request_json; the raw
+                # ``requests.RequestException`` clause guards against any
+                # leak from session-level retries.
                 logger.warning(
                     "SCIO HTTP get_vulnerability_count failed for %s: %s; "
                     "falling back to SQL",
@@ -644,13 +661,18 @@ class ActionablePackageAvailableVersion(Base):
         if self.scancode_project_uuid is None:
             return None
 
+        from libinv.services.scancodeio import ScancodeioError
         from libinv.services.scancodeio_client import get_default_client
 
         http_client = get_default_client()
         if http_client is not None:
             try:
                 return http_client.get_severity_counts(self.scancode_project_uuid)
-            except Exception as exc:
+            except (ScancodeioError, requests.RequestException) as exc:
+                # Sprint 47.2: narrowed from `except Exception`. Same
+                # rationale as ``_get_vulnerabilities_count``: SCIO HTTP
+                # client raises ``ScancodeioError`` subclasses on all
+                # documented failure modes (404, 5xx, transport).
                 logger.warning(
                     "SCIO HTTP get_severity_counts failed for %s: %s; "
                     "falling back to SQL",
@@ -787,7 +809,14 @@ class ActionablePackageAvailableVersion(Base):
             response_json = response.json()
             self.scancode_project_uuid = response_json["uuid"]
             self.vulns_count = self._get_vulnerabilities_count()
-        except Exception as e:
+        except (requests.RequestException, ValueError, KeyError, SQLAlchemyError) as e:
+            # Sprint 47.2: narrowed from `except Exception`. Sources:
+            # * ``request_session.post`` -> requests.RequestException
+            # * ``response.json()`` -> ValueError (JSONDecodeError)
+            # * ``response_json["uuid"]`` -> KeyError when scancodeio
+            #   returns an error payload without ``uuid``
+            # * ``_get_vulnerabilities_count`` -> SQLAlchemyError on the
+            #   SQL fallback path (already narrows ScancodeioError above).
             self.scan_status = "FAILED"
             self.scan_output = f"Error running scancodeio - Error: {e}"
             logger.error(f"Error running scancodeio - Error: {e}")

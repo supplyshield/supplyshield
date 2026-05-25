@@ -12,6 +12,7 @@ import logging
 
 import requests  # noqa: F401  re-exported for test mocks (libinv.models.requests)
 import semver
+from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.sql.expression import ClauseElement
 
 from libinv.base import session_scope  # noqa: F401  re-exported via __init__.py
@@ -20,7 +21,11 @@ from libinv.helpers import case_insensitive_dict
 
 try:
     from libinv.scio_models import DiscoveredPackage
-except Exception:  # pragma: no cover - fallback for bootstrap when scanpipe tables missing
+except SQLAlchemyError:  # pragma: no cover - fallback for bootstrap when scanpipe tables missing
+    # Sprint 47.2: narrowed from `except Exception`. The only failure
+    # mode for ``libinv.scio_models`` import is the SQLAlchemy reflection
+    # call (``inspect(engine).has_table``) when scanpipe tables are
+    # missing or the SCIO DB is unreachable.
     DiscoveredPackage = None
 
 MAX_LENGTH_LICENSE = 150
@@ -68,7 +73,11 @@ def get_or_update_entry(session, model, query_filter, **kwargs):
             return obj
         else:
             return f"No entry found with filter: {query_filter}"
-    except Exception as e:
+    except SQLAlchemyError as e:
+        # Sprint 47.2: narrowed from `except Exception`. The protected
+        # block is purely ORM I/O — ``session.query``,
+        # ``session.commit`` — which raises ``SQLAlchemyError``
+        # subclasses on failure (StaleData, IntegrityError, etc.).
         session.rollback()
         return f"Error: {str(e)}"
 
