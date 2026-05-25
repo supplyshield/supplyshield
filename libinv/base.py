@@ -1,9 +1,6 @@
 from __future__ import annotations
 
-import warnings
 from contextlib import contextmanager
-from typing import Any
-from typing import ClassVar
 from typing import Iterator
 
 import sqlalchemy as db
@@ -84,60 +81,13 @@ Session: sessionmaker = sessionmaker(bind=engine)
 ScopedSession: scoped_session = scoped_session(Session)
 
 
-class _ConnDeprecationProxy:
-    """Proxy that emits a one-shot DeprecationWarning on first use of `conn`.
-
-    Sprint 0-12 migrated every libinv caller from `conn.<method>` to
-    `with session_scope() as session: session.<method>` or to helper
-    signatures that accept an optional `session=` kwarg with a
-    `s = session or conn` fallback. Sprint 48.1 eliminated all
-    14 of those fallbacks by making `session` required (either positional
-    or keyword-only) on every helper that previously used the pattern.
-
-    A handful of *direct* `conn.<method>` call sites still exist (CLI
-    health probe + Flask `/healthz` + `libinv.api.actionable._common`
-    legacy session pool). They all surface here and warn. The warning
-    fires once per process to avoid log spam.
-    """
-
-    _warned: ClassVar[bool] = False
-    _target: Any
-
-    def __init__(self, target: Any) -> None:
-        self._target = target
-
-    def _warn_once(self) -> None:
-        if not _ConnDeprecationProxy._warned:
-            _ConnDeprecationProxy._warned = True
-            warnings.warn(
-                "libinv.base.conn is deprecated; use `session_scope()` or "
-                "accept an explicit `session` parameter.",
-                DeprecationWarning,
-                stacklevel=3,
-            )
-
-    def __getattr__(self, name: str) -> Any:
-        self._warn_once()
-        return getattr(self._target, name)
-
-    def __call__(self, *args: Any, **kwargs: Any) -> Any:
-        self._warn_once()
-        return self._target(*args, **kwargs)
-
-    def __bool__(self) -> bool:
-        # Pre-Sprint-48.1 `s = session or conn` callers depended on this
-        # returning True. Sprint 48.1 removed every such fallback site;
-        # the override is retained as a no-op safety net for any external
-        # mockers that may still rely on it.
-        return True
-
-
-# DEPRECATED: prefer `session_scope()` for explicit-lifecycle code, or accept a
-# `session` parameter on model methods (see `Actionable.get_latest` / `get_safe_versions`
-# for the canonical pattern). `conn` is kept as an alias for the scoped session so the
-# ~30 existing call sites keep working; new code should not use it. Slated for removal
-# once all callers are migrated (tracked under Sprint 4+).
-conn = _ConnDeprecationProxy(ScopedSession)
+# Sprint 56 — `_ConnDeprecationProxy` + module-level `conn` removed.
+# All historical `libinv.base.conn` import sites were eliminated by
+# Sprint 48.1 (helpers migrated to required `session` parameters) and
+# the remaining four locally-scoped `conn` variables (cli/bridge.py,
+# cli/daemon.py, api/health.py, api/actionable/_common.py) are *local*
+# bindings to `Session()` / `engine.connect()` — they never depended
+# on the module-level proxy. Prefer `session_scope()` for new code.
 
 
 class LibinvBase:

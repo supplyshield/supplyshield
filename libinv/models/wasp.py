@@ -30,6 +30,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from git.exc import GitCommandError
+from git.exc import GitError
 from jsonschema import SchemaError
 from jsonschema import ValidationError
 from jsonschema import validate
@@ -353,14 +354,15 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
             logger.error(e)
             self.throw(f"failed to clone repository: {repository.url}")
             raise
-        except Exception as e:  # noqa: BLE001
-            # Sprint 47.2: narrowing deferred — multi-source error path
-            # (gitpython internals can surface OSError, ValueError,
-            # InvalidGitRepositoryError, NoSuchPathError as well as
-            # filesystem failures from ``Path.mkdir``). Kept broad as a
-            # last-resort guard that still re-raises after recording the
-            # failure on the wasp row; reviewer to triage if a tighter
-            # union is appropriate.
+        except (GitError, OSError) as e:
+            # Sprint 56: narrowed from ``except Exception``. ``GitError`` is
+            # gitpython's base class (covers ``InvalidGitRepositoryError``,
+            # ``NoSuchPathError``, ``GitCommandError`` subclasses surfaced
+            # through ``repository.clone`` internals), and ``OSError``
+            # covers filesystem failures from ``Path.mkdir`` /
+            # ``repo.working_dir`` cleanup. The earlier ``except
+            # GitCommandError`` clause above still handles the explicit
+            # CLI-error path with the dedicated ``self.throw`` message.
             logger.error(f"Unexpected error during clone: {e}")
             self.throw(f"failed to clone repository: {repository.url} - {str(e)}")
             raise

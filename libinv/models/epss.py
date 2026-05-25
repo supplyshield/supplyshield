@@ -40,6 +40,7 @@ from sqlalchemy import Index
 from sqlalchemy import String
 from sqlalchemy import func
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.exc import SQLAlchemyError
 
 from libinv.base import Base
@@ -178,9 +179,13 @@ class EPSS(Base):
                     f"Pruned {deleted} stale EPSS rows older than "
                     f"{LIBINV_EPSS_RETENTION_DAYS} days from max(epss_date)"
                 )
-        except Exception as e:  # noqa: BLE001
-            # Pruning is best-effort: never let it bubble up and mask
-            # a successful refresh.
+        except (SQLAlchemyError, OperationalError) as e:
+            # Sprint 56: narrowed from ``except Exception``. A DELETE
+            # statement can raise ``SQLAlchemyError`` (statement/ORM
+            # failures, integrity violations, connection-pool errors)
+            # or ``OperationalError`` (driver-level connection drops);
+            # pruning is best-effort so we log and continue without
+            # masking a successful refresh.
             if logger:
                 logger.error(f"EPSS row pruning failed: {e}")
 
