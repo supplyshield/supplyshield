@@ -45,7 +45,7 @@ class SastLobMetaData(Base, TimestampMixin):
     sub_module = Column(String(1024), nullable=False)
     # Sprint 34.1: repository_id nullable=True — LOB metadata may be created
     # before the repo row is bridged.
-    repository_id = Column(
+    repository_id: Column = Column(
         ForeignKey("libinv.repositories.id", onupdate="CASCADE"), nullable=True
     )
 
@@ -67,7 +67,7 @@ class SastResult(Base, TimestampMixin):
     # Sprint 34.1: all FK + free-form text fields below are nullable=True
     # (sast result rows can be partial — many fields populated only after
     # validation / triage).
-    lob_id = Column(
+    lob_id: Column = Column(
         ForeignKey("libinv.sast_lob_metadata.id", onupdate="CASCADE"), nullable=True
     )
     # Sprint 37.2: never traversed via result.lob_metadata in api/cli/scanners.
@@ -83,7 +83,7 @@ class SastResult(Base, TimestampMixin):
     public_initial_point = Column(Text, nullable=True)
     source = Column(String(200), nullable=True)
     isactive = Column(Boolean, nullable=True)
-    wasp_id = Column(
+    wasp_id: Column = Column(
         ForeignKey("libinv.wasps.id", onupdate="CASCADE", ondelete="CASCADE"),
         nullable=True,
     )

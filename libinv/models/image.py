@@ -52,7 +52,7 @@ class Image(Base, TimestampMixin):
     name = Column(String(100), nullable=False)
     # Sprint 34.1: explicit nullable=True for optional build/CI metadata.
     backend_tech = Column(String(24), nullable=True)
-    account_id = Column(
+    account_id: Column = Column(
         ForeignKey("libinv.accounts.id", onupdate="CASCADE", ondelete="CASCADE"), nullable=False
     )
     digest = Column(String(72), nullable=False)
@@ -64,17 +64,17 @@ class Image(Base, TimestampMixin):
     platform = Column(String(24), nullable=False)
     # Sprint 34.1: parent/base/repo/wasp FKs are nullable=True — root images
     # have no parent, and images may exist before being bridged to a repo/wasp.
-    parent_image_id = Column(
+    parent_image_id: Column = Column(
         ForeignKey("libinv.images.id", onupdate="CASCADE", ondelete="CASCADE"), nullable=True
     )
-    base_image_id = Column(
+    base_image_id: Column = Column(
         ForeignKey("libinv.images.id", onupdate="CASCADE", ondelete="CASCADE"), nullable=True
     )
-    repository_id = Column(
+    repository_id: Column = Column(
         ForeignKey("libinv.repositories.id", onupdate="CASCADE", ondelete="CASCADE"),
         nullable=True,
     )
-    wasp_id = Column(
+    wasp_id: Column = Column(
         ForeignKey("libinv.wasps.id", onupdate="CASCADE", ondelete="CASCADE"), nullable=True
     )
 
@@ -114,7 +114,7 @@ class Image(Base, TimestampMixin):
         return f"{self.name}-{self.id}"
 
     @property
-    def sorted_layers(self) -> str:
+    def sorted_layers(self) -> list["Layer"]:
         return sorted(self.layers, key=lambda x: x.seq)
 
     def is_parent_image_of(self, other: "Image"):
@@ -146,10 +146,10 @@ class Image(Base, TimestampMixin):
 class ImagePackageAssociation(Base):
     __tablename__ = "image_package_association"
 
-    image_id = Column(
+    image_id: Column = Column(
         ForeignKey("libinv.images.id", onupdate="CASCADE", ondelete="CASCADE"), primary_key=True
     )
-    package_id = Column(
+    package_id: Column = Column(
         ForeignKey("libinv.packages.id", onupdate="CASCADE", ondelete="CASCADE"), primary_key=True
     )
     # Sprint 34.1: optional free-form metadata blob.
@@ -174,7 +174,7 @@ class ImagePackageAssociation(Base):
 class Layer(Base, TimestampMixin):
     __tablename__ = "layers"
     id = Column(CHAR(length=64), primary_key=True)
-    image_id = Column(
+    image_id: Column = Column(
         ForeignKey("libinv.images.id", onupdate="CASCADE", ondelete="CASCADE"), primary_key=True
     )
     seq = Column(Integer, primary_key=True, nullable=False)
@@ -194,10 +194,10 @@ class LatestImage(Base):
     """
 
     __tablename__ = "latest_images"
-    image_id = Column(
+    image_id: Column = Column(
         ForeignKey("libinv.images.id", onupdate="CASCADE", ondelete="CASCADE"), primary_key=True
     )
-    account_id = Column(
+    account_id: Column = Column(
         ForeignKey("libinv.accounts.id", onupdate="CASCADE", ondelete="CASCADE"), primary_key=True
     )  # This helps to speed up joins with account table
 

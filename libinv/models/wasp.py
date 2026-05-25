@@ -126,7 +126,7 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
     # Sprint 34.1: repository_id nullable=True for the (rare) excluded-repo
     # path that returns before linking; Wasp's domain invariants come from
     # is_valid_raw_message at the caterpillar-message layer.
-    repository_id = Column(
+    repository_id: Column = Column(
         ForeignKey("libinv.repositories.id", onupdate="CASCADE"), nullable=True
     )
     # Sprint 34.1: tag is not in the message schema's required[] — keep optional.
@@ -139,7 +139,7 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
     environment = Column(String(128), nullable=False)
     jenkins_url = Column(String(256), nullable=False)
     raw_message = Column(String(2048), nullable=False)
-    ate_successfully = Column(Boolean(), nullable=False, default=True, server_default="1")
+    ate_successfully: Column = Column(Boolean(), nullable=False, default=True, server_default="1")
     # Sprint 34.1: server-default + Python-default of "" — never NULL.
     complaints = Column(Text, default="", server_default="", nullable=False)
 
@@ -260,7 +260,7 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
 
         if is_excluded_repo(repository_url):
             logger.error(f"[!] Excluded repository: {repository_url}")
-            return
+            return None
 
         repository, created = get_or_create(s, Repository, **explode_git_url(repository_url))
         if created:
@@ -310,8 +310,8 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
         except PendingRollbackError:
             s.rollback()
 
-        self.complaints += why
-        self.ate_successfully = False
+        self.complaints += why  # type: ignore[assignment]
+        self.ate_successfully = False  # type: ignore[assignment]
         logger.error(f"{self} raised: {why}")
 
     @property

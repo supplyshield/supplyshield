@@ -49,12 +49,12 @@ class Secbug(Base, TimestampMixin):
     vulnerability_category = Column(String(120), nullable=True)
     identified_by = Column(String(40), nullable=True)
     company = Column(String(20), nullable=True)
-    is_risk = Column(Boolean(), nullable=True)
+    is_risk: Column = Column(Boolean(), nullable=True)
     pulled_at = Column(DateTime(timezone=True), nullable=False)
     deleted_at = Column(DateTime(timezone=True), nullable=True)
     # Sprint 34.1: repository_id nullable=True — secbugs may exist before
     # a repository is associated (e.g. cross-cutting org-level bugs).
-    repository_id = Column(
+    repository_id: Column = Column(
         ForeignKey("libinv.repositories.id", onupdate="CASCADE", ondelete="CASCADE"),
         nullable=True,
     )

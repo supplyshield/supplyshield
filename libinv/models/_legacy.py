@@ -26,7 +26,7 @@ except SQLAlchemyError:  # pragma: no cover - fallback for bootstrap when scanpi
     # mode for ``libinv.scio_models`` import is the SQLAlchemy reflection
     # call (``inspect(engine).has_table``) when scanpipe tables are
     # missing or the SCIO DB is unreachable.
-    DiscoveredPackage = None
+    DiscoveredPackage = None  # type: ignore[assignment]
 
 MAX_LENGTH_LICENSE = 150
 MAX_LENGTH_VULNERABILITY_DESCRIPTION = 500

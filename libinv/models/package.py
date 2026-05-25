@@ -50,10 +50,10 @@ from libinv.models._legacy import MAX_LENGTH_LICENSE
 class PackageLicenseAssociation(Base):
     __tablename__ = "package_license_association"
 
-    package_id = Column(
+    package_id: Column = Column(
         ForeignKey("libinv.packages.id", onupdate="CASCADE", ondelete="CASCADE"), primary_key=True
     )
-    license_id = Column(
+    license_id: Column = Column(
         ForeignKey("libinv.license_family.id", onupdate="CASCADE", ondelete="CASCADE"),
         primary_key=True,
     )

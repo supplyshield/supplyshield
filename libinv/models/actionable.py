@@ -65,7 +65,7 @@ except SQLAlchemyError:  # pragma: no cover - fallback for bootstrap when scanpi
     # mode for ``libinv.scio_models`` import is the SQLAlchemy reflection
     # call (``inspect(engine).has_table``) when scanpipe tables are
     # missing or the SCIO DB is unreachable.
-    DiscoveredPackage = None
+    DiscoveredPackage = None  # type: ignore[assignment]
 
 if TYPE_CHECKING:
     pass
@@ -579,7 +579,7 @@ class ActionablePackageAvailableVersion(Base):
     )
     # Sprint 34.1: actionable_id FK left nullable=True — an APAV row may
     # transiently exist without an Actionable parent during ingestion.
-    actionable_id = Column(
+    actionable_id: Column = Column(
         ForeignKey("libinv.safe_actionable.uuid", onupdate="CASCADE", ondelete="CASCADE"),
         nullable=True,
     )
@@ -785,7 +785,7 @@ class ActionablePackageAvailableVersion(Base):
 
         try:
             request_session = requests.Session()
-            self.scan_status = "TRIGGERED"
+            self.scan_status = "TRIGGERED"  # type: ignore[assignment]
             if SCANCODEIO_API_KEY:
                 request_session.headers.update({"Authorization": f"Token {SCANCODEIO_API_KEY}"})
 
@@ -830,12 +830,12 @@ class ActionablePackageAvailableVersion(Base):
             #   returns an error payload without ``uuid``
             # * ``_get_vulnerabilities_count`` -> SQLAlchemyError on the
             #   SQL fallback path (already narrows ScancodeioError above).
-            self.scan_status = "FAILED"
-            self.scan_output = f"Error running scancodeio - Error: {e}"
+            self.scan_status = "FAILED"  # type: ignore[assignment]
+            self.scan_output = f"Error running scancodeio - Error: {e}"  # type: ignore[assignment]
             logger.error(f"Error running scancodeio - Error: {e}")
         finally:
             if self.scan_status != "FAILED":
-                self.scan_status = "SUCCESS"
+                self.scan_status = "SUCCESS"  # type: ignore[assignment]
             s.add(self)
             s.commit()
             memory_file.close()
@@ -910,11 +910,11 @@ class RepositoryActionablePackageAvailableVersion(Base):
     uuid = Column(String(36), nullable=False, unique=True, default=uuid4, primary_key=True)
     # Sprint 34.1: FKs left nullable=True — association rows may be created
     # by partial ingestion paths that fill in linkage incrementally.
-    wasp_uuid = Column(
+    wasp_uuid: Column = Column(
         ForeignKey("libinv.wasps.uuid", onupdate="CASCADE", ondelete="CASCADE"),
         nullable=True,
     )
-    actionable_package_version_id = Column(
+    actionable_package_version_id: Column = Column(
         ForeignKey(
             "libinv.actionable_package_available_versions.uuid",
             onupdate="CASCADE",
@@ -922,7 +922,7 @@ class RepositoryActionablePackageAvailableVersion(Base):
         ),
         nullable=True,
     )
-    repository_id = Column(
+    repository_id: Column = Column(
         ForeignKey("libinv.repositories.id", onupdate="CASCADE", ondelete="CASCADE"),
         nullable=True,
     )
