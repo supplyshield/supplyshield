@@ -51,10 +51,15 @@ jobs:
         python -m mypy --config-file pyproject.toml
       continue-on-error: false
 
+    # Sprint 54.4 — bandit is a required gate. The baseline file
+    # `.bandit_baseline.json` records the current accepted findings; CI fails
+    # only on NEW findings beyond that baseline. To accept a new finding,
+    # regenerate the baseline locally (`bandit -r libinv -f json -o
+    # .bandit_baseline.json`) and justify the addition in the PR.
     - name: Run bandit
       run: |
-        python -m bandit -r libinv/ -ll -i
-      continue-on-error: true
+        python -m bandit -r libinv/ --baseline .bandit_baseline.json
+      continue-on-error: false
 
     - name: Run pip-audit
       run: |
