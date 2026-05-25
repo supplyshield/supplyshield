@@ -31,7 +31,7 @@ RUN curl -fsSL https://deb.nodesource.com/setup_current.x | bash - && \
 EXPOSE 8000
 
 # 2. Copy all files needed for dependency installation in one step
-COPY pyproject.toml setup.cfg Makefile pylintrc ./
+COPY pyproject.toml Makefile ./
 COPY etc ./etc
 COPY libinv/cli/cli.py ./libinv/cli/
 COPY libinv/logger.py libinv/__init__.py ./libinv/

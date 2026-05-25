@@ -1,3 +1,73 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+# Sprint 54.3: canonical project metadata + dependency declaration.
+# Migrated from setup.cfg ([metadata] + [options]). setup.cfg is now deleted —
+# setuptools >=61 reads [project] from pyproject.toml as the source of truth.
+# Version ranges (NOT pins) live here; requirements.txt remains the
+# operator-facing pinned lockfile for reproducible deployments.
+[project]
+name = "libinv"
+version = "0.0.1"
+description = "SupplyShield is an open-source application security orchestration framework designed to secure your software supply chain from vulnerabilities, malicious dependencies, and unapproved base images. It provides a comprehensive solution to automate the detection, prioritization, and resolution of security issues in your open-source dependencies and containerized applications."
+authors = [
+    {name = "Hritik Vijay", email = "hrtk@duck.com"},
+]
+keywords = ["sca", "sbom"]
+classifiers = [
+    "Framework :: Flask",
+    "Programming Language :: Python :: 3",
+]
+requires-python = ">=3.12"
+dependencies = [
+    "alembic",
+    "attrs",
+    "black",
+    "boto3",
+    "docker",
+    "Flask",
+    "Flask-SQLAlchemy",
+    "immutabledict",
+    "isort",
+    "packaging",
+    "pylint",
+    "ruff",
+    "requests",
+    "SQLAlchemy>=2.0.0",
+    "tqdm",
+    "click",
+    "GitPython",
+    "semgrep==1.163.0",
+    "javalang",
+    "jira==3.10.5",
+    "python-dotenv>=1.0.0",
+    "psycopg2-binary",
+    "networkx",
+    "pyvis",
+    "prettytable",
+    "gunicorn",
+    "packageurl-python",
+    "schedule",
+    "sphinx",
+    "cryptography",
+    "pyjwt",
+    "univers",
+    "jsonschema",
+]
+
+[project.optional-dependencies]
+DEV = [
+    "pytest>=8.3.3",
+    "coverage>=7.6.4",
+]
+
+[project.scripts]
+libinv = "libinv.cli.cli:cli"
+
+[tool.setuptools.packages.find]
+include = ["libinv*"]
+
 [tool.black]
 line-length = 100
 include = '\.pyi?$'
@@ -27,14 +97,6 @@ force-single-line = true
 
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
-
-[tool.uv.sources]
-libinv = { workspace = true }
-
-[dependency-groups]
-dev = [
-    "libinv",
-]
 
 # Sprint 16: gradual typing — scoped to recently-restructured public APIs only.
 # Sprint 17 will broaden coverage and wire mypy into CI. Configuration lives
