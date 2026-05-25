@@ -15,7 +15,9 @@ from libinv.models import Image
 from libinv.models import ImagePackageAssociation
 from libinv.models import Package
 from libinv.models import Vulnerability
+from libinv.models import VulnerabilityFixVersion
 from libinv.models import VulnerabilityPackageAssociation
+from libinv.models import VulnerabilityRelatedCve
 from libinv.scanners.image_scanner.exceptions import SCADependencyException
 from libinv.scanners.image_scanner.logger import logger
 
@@ -120,7 +122,9 @@ def process_sca_match_for_image(session: OrmSession, image, match):
         raise SCADependencyException(f"Package not found in image: {package_filter}")
 
     vuln = match["vulnerability"]
-    fix = ",".join(vuln["fix"]["versions"])
+    fix_version_list = [v for v in vuln["fix"]["versions"] if v]
+    fix = ",".join(fix_version_list)
+    related_cve_ids = [v["id"] for v in match.get("relatedVulnerabilities") if v.get("id")]
     cvss_list = extract_first_nvd_cvss(match)
     if cvss_list:
         cvss = cvss_list[0]
@@ -135,7 +139,11 @@ def process_sca_match_for_image(session: OrmSession, image, match):
 
     vulnerability.set_description(vuln.get("description"))
     vulnerability.severity = vuln.get("severity")
-    vulnerability.related = ",".join(v["id"] for v in match.get("relatedVulnerabilities"))
+    # Sprint 46.2: keep the legacy comma-separated column populated for
+    # readers that have not yet migrated to ``.related_cves``; the new
+    # relational table is the canonical source going forward.
+    vulnerability.related = ",".join(related_cve_ids)
+    _sync_vulnerability_related_cves(session, vulnerability, related_cve_ids)
     if cvss:
         vulnerability.nvd_cvss_base_score = cvss["metrics"]["baseScore"]
         vulnerability.nvd_cvss_exploitability_score = cvss["metrics"]["exploitabilityScore"]
@@ -153,12 +161,55 @@ def process_sca_match_for_image(session: OrmSession, image, match):
             package_id=package.id, vulnerability_id=vulnerability.id
         )
         session.add(association)
+    # Sprint 46.1: keep the legacy comma-separated column populated for
+    # readers that have not yet migrated to ``.fix_versions``; the new
+    # relational table is the canonical source going forward.
     association.fix = fix
+    _sync_vulnerability_fix_versions(session, association, fix_version_list)
 
     if session.is_modified(association) or session.is_modified(vulnerability) or session.new:
         return vulnerability, True
 
     return vulnerability, False
+
+
+def _sync_vulnerability_fix_versions(session, association, fix_version_list):
+    """Sprint 46.1: replace ``association.fix_versions`` with the given list.
+
+    Existing rows whose ``fix_version`` matches the new payload are
+    kept; others are removed. New tokens are inserted. The UNIQUE
+    constraint on (vulnerability_id, package_id, fix_version) guards
+    against duplicates.
+    """
+    desired = {v.strip() for v in fix_version_list if v and v.strip()}
+    existing = {row.fix_version: row for row in association.fix_versions}
+
+    for stale in set(existing) - desired:
+        association.fix_versions.remove(existing[stale])
+    for new_version in desired - set(existing):
+        association.fix_versions.append(
+            VulnerabilityFixVersion(
+                vulnerability_id=association.vulnerability_id,
+                package_id=association.package_id,
+                fix_version=new_version,
+            )
+        )
+
+
+def _sync_vulnerability_related_cves(session, vulnerability, related_cve_ids):
+    """Sprint 46.2: replace ``vulnerability.related_cves`` with the given ids.
+
+    Same idempotent-replace strategy as ``_sync_vulnerability_fix_versions``.
+    """
+    desired = {cve.strip() for cve in related_cve_ids if cve and cve.strip()}
+    existing = {row.related_cve_id: row for row in vulnerability.related_cves}
+
+    for stale in set(existing) - desired:
+        vulnerability.related_cves.remove(existing[stale])
+    for new_cve in desired - set(existing):
+        vulnerability.related_cves.append(
+            VulnerabilityRelatedCve(related_cve_id=new_cve)
+        )
 
 
 def extract_first_nvd_cvss(match: dict):

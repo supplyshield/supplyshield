@@ -78,6 +78,11 @@ from libinv.models.secbug import Secbug  # noqa: F401
 # Sprint 40.2: Vulnerability-domain classes live in libinv/models/vulnerability.py.
 from libinv.models.vulnerability import Vulnerability  # noqa: F401
 from libinv.models.vulnerability import VulnerabilityPackageAssociation  # noqa: F401
+# Sprint 46.1 / 46.2: relational replacements for the legacy
+# ``VulnerabilityPackageAssociation.fix`` and ``Vulnerability.related``
+# comma-separated columns.
+from libinv.models.vulnerability import VulnerabilityFixVersion  # noqa: F401
+from libinv.models.vulnerability import VulnerabilityRelatedCve  # noqa: F401
 # Sprint 41.1: Wasp lives in libinv/models/wasp.py.
 from libinv.models.wasp import Wasp  # noqa: F401
 from libinv.models._legacy import filter_model_collection  # noqa: F401

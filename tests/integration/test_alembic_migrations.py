@@ -32,8 +32,9 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 # Sprint 2's head revision — bump this when a new migration lands.
 # Sprint 34.1–34.3 added 0003 (epss_date -> Date), 0004 (String(N) tightening),
 # and 0005 (nullable= tightening across ~30 columns). Sprint 45.1 added
-# 0006 (sca_actionable_items materialized view).
-HEAD_REVISION = "0006_sca_actionable_view"
+# 0006 (sca_actionable_items materialized view). Sprint 46.1 / 46.2 added
+# 0007 (vulnerability_fix_versions) and 0008 (vulnerability_related_cves).
+HEAD_REVISION = "0008_vulnerability_related"
 
 
 def _db_env_from_url(url: str) -> dict:
