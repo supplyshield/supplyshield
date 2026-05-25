@@ -36,13 +36,15 @@ Sprint 0-16 audit. Set the required ones before starting any of the
 |                           |        |              |        | closed with HTTP 503 ``auth not configured``.   |
 |                           |        |              |        | GET / HEAD / OPTIONS are unaffected.            |
 +---------------------------+--------+--------------+--------+-------------------------------------------------+
-| ``LIBINV_SCIO_USE_HTTP``  | bool   | ``false``    | 14/15  | Opt-in flag for                                 |
-|                           |        |              |        | ``libinv.services.scancodeio_client``. When     |
-|                           |        |              |        | set to ``true`` / ``1`` / ``yes``, the          |
-|                           |        |              |        | ScanCode.io client routes calls through the     |
-|                           |        |              |        | REST API instead of the legacy SQL reflection   |
-|                           |        |              |        | path in ``libinv/scio_models.py``. Any other    |
-|                           |        |              |        | value keeps the SQL path.                       |
+| ``LIBINV_SCIO_USE_HTTP``  | bool   | ``true``     | 14/15  | Routing flag for                                |
+|                           |        | (Sprint 48.4)|        | ``libinv.services.scancodeio_client``. Default  |
+|                           |        |              |        | flipped to ``true`` in Sprint 48.4 — the HTTP   |
+|                           |        |              |        | path has been stable across Sprints 14-23       |
+|                           |        |              |        | (transport error wrapping, paginated endpoints, |
+|                           |        |              |        | request-id propagation, retries). Setting       |
+|                           |        |              |        | ``LIBINV_SCIO_USE_HTTP=false`` opts back into   |
+|                           |        |              |        | the legacy SQL reflection path in               |
+|                           |        |              |        | ``libinv/scio_models.py`` for back-compat only. |
 +---------------------------+--------+--------------+--------+-------------------------------------------------+
 | ``LIBINV_LOG_FORMAT``     | string | unset        | 16     | When set to ``json``,                           |
 |                           |        |              |        | ``install_json_formatter_if_configured()``      |

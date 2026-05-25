@@ -212,6 +212,51 @@ Materialized views
   cadence in the host crontab if the dashboard needs to be fresher
   — the unique index makes CONCURRENTLY safe at any cron tick width.
 
+************************
+Partitioning evaluation
+************************
+
+(Sprint 45.3) ``repository_actionable_package_versions_association`` is the
+fact table behind the SCA dashboard and grows in proportion to
+``repositories × packages × environments``. Whether to partition it is a
+gated decision: partitioning has non-trivial operational cost (per-partition
+indexes, refresh windows, query planner attach/detach) so it should be
+deferred until the table actually exceeds the thresholds at which a single
+heap starts to bite.
+
+**Gate.** Partition only when EITHER of the following holds on the
+production database, observed for two consecutive weeks:
+
+* ``pg_relation_size`` > **20 GB**, OR
+* approximate row count (``pg_class.reltuples`` after a recent
+  ``ANALYZE``) > **50 000 000** (50M).
+
+Operators can sample the gate with::
+
+    SELECT
+      pg_size_pretty(pg_relation_size('repository_actionable_package_versions_association')) AS heap_size,
+      (SELECT reltuples::bigint FROM pg_class
+        WHERE relname = 'repository_actionable_package_versions_association') AS approx_rows;
+
+Below the gate, the existing FK + composite indexes (declared in alembic
+``0002_fk_indexes``) are sufficient and partition overhead is net-negative.
+
+**Proposed scheme.** When the gate trips, the recommended layout is
+``PARTITION BY LIST (environment)``. ``environment`` is a low-cardinality,
+high-selectivity column (most dashboard queries already filter on it via
+``having()``), so list partitioning yields immediate partition pruning on
+the hot Metabase query path without forcing a hash-mod redistribution.
+Each environment becomes one child partition; a ``DEFAULT`` partition
+absorbs unknown / newly added environments until a follow-up migration
+splits them out.
+
+**Status.** ``TODO(sprint-56+)``: the actual ``CREATE TABLE ... PARTITION
+BY LIST (environment)`` migration is pending operator-side stats from
+production — at the time of this writing we cannot query the integration
+DB from CI to confirm the gate (the ephemeral pytest-postgresql DB is
+seeded per-test and never crosses the 50M / 20 GB threshold). Re-evaluate
+after the next quarterly inventory snapshot.
+
 ************
 Test layout
 ************

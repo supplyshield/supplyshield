@@ -1,7 +1,13 @@
 PYTHON_EXE=python3
-GRYPE_VERSION=v0.54.0
-SYFT_VERSION=v0.60.3
-CRANE_VERSION=v0.12.1
+# Sprint 54.1 — tool version pins bumped to current stable releases.
+# Anchore tooling (grype/syft) and google/go-containerregistry (crane)
+# all maintain CVE-relevant patches; pin to a specific tag rather than
+# tracking ``latest`` so reproducibility is preserved across CI runs.
+GRYPE_VERSION=v0.86.1
+SYFT_VERSION=v1.18.1
+CRANE_VERSION=v0.20.2
+# Node tooling pin used by the ``cdxgen`` target below.
+CDXGEN_VERSION=10.7.1
 VENV=venv
 ACTIVATE?=. ${VENV}/bin/activate
 OS=Linux
@@ -39,7 +45,7 @@ python-deps-dev: virtualenv
 
 cdxgen:
 	@echo "-> Install cdxgen"
-	npm install --prefix etc/third_party/ @cyclonedx/cdxgen@10.7.1
+	npm install --prefix etc/third_party/ @cyclonedx/cdxgen@${CDXGEN_VERSION}
 	npm install --prefix etc/third_party/ @cyclonedx/cdxgen-plugins-bin
 
 virtualenv:

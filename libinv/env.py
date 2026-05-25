@@ -94,7 +94,12 @@ IMAGE_SCAN_ENABLED = _parse_bool(os.getenv("IMAGE_SCAN_ENABLED"), default=False)
 # instead. Any accidental SQL access to scio_models in HTTP mode surfaces
 # loud (``RuntimeError``) rather than silently hitting the legacy reflection
 # path.
-LIBINV_SCIO_USE_HTTP = _parse_bool(os.getenv("LIBINV_SCIO_USE_HTTP"), default=False)
+# Sprint 48.4 — default flipped to True. The HTTP path has been stable
+# across Sprints 14-23 (transport.py error wrapping, paginated endpoints,
+# request-id propagation, retries) and is now the recommended mode.
+# Operators on the legacy SQL-reflection path must opt-out explicitly via
+# ``LIBINV_SCIO_USE_HTTP=false``.
+LIBINV_SCIO_USE_HTTP = _parse_bool(os.getenv("LIBINV_SCIO_USE_HTTP"), default=True)
 
 # Sprint 37.1 — when true, register a SQLAlchemy `Mapper.after_configured`
 # hook that flips every `relationship()` to `lazy="raise_on_sql"`. This
