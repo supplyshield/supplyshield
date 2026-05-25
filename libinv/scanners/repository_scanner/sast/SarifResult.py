@@ -4,7 +4,6 @@ import logging
 from sqlalchemy.orm import Session as OrmSession
 
 from libinv.api.metrics import sast_findings_total
-from libinv.base import conn
 from libinv.models import SastLobMetaData
 from libinv.models import SastResult
 from libinv.scanners.repository_scanner.sast.enums.ConfidenceEnum import ConfidenceEnum
@@ -40,7 +39,8 @@ class SarifResult:
     parse sarif result
     """
 
-    def __init__(self, config, sariffile, source, session: OrmSession | None = None) -> None:
+    def __init__(self, config, sariffile, source, *, session: OrmSession) -> None:
+        # Sprint 48.1: ``session`` is required keyword-only (no more conn fallback).
         with open(sariffile, "r", encoding="utf-8") as f:
             self.sarifjson = json.load(f)
         self.config = config
@@ -56,8 +56,8 @@ class SarifResult:
 
     @property
     def _s(self):
-        """Return the active session: caller-provided or the legacy ``conn`` fallback."""
-        return self._session or conn
+        """Return the active session (always caller-provided, Sprint 48.1)."""
+        return self._session
 
     def add_lob_module(self):
         """

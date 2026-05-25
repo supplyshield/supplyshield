@@ -36,7 +36,6 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.schema import UniqueConstraint
 
 from libinv.base import Base
-from libinv.base import conn
 from libinv.helpers import explode_git_url
 from libinv.models._base import TimestampMixin
 from libinv.vcs import BitBucketApp
@@ -103,13 +102,13 @@ class Repository(Base):
 
     @classmethod
     def get_by_git_url(
-        cls, git_url: str, session: OrmSession | None = None
+        cls, git_url: str, session: OrmSession
     ) -> "Repository | None":
-        s = session or conn
+        # Sprint 48.1: session required (no more conn fallback).
         try:
             repo_url = Repository.from_url(git_url)
             repo = (
-                s.query(Repository)
+                session.query(Repository)
                 .filter(
                     and_(
                         Repository.name == repo_url.name,
@@ -124,14 +123,16 @@ class Repository(Base):
             return None
 
     def raise_or_update_sca_issues(
-        self, environment: str = "stage", session: OrmSession | None = None
+        self, environment: str = "stage", *, session: OrmSession
     ) -> None:
         # Sprint 41.3: lazy import to avoid circular dep between
         # ``libinv.models.repository`` and ``libinv.models.actionable``.
+        # Sprint 48.1: session required keyword-only (no more conn fallback).
         from libinv.models.actionable import Actionable
 
-        s = session or conn
-        actionables = Actionable.get_actionable_and_secure_versions(s, self.id, environment)
+        actionables = Actionable.get_actionable_and_secure_versions(
+            session, self.id, environment
+        )
         if not actionables["results"]:
             Actionable.close_sca_issue(self)
         else:
@@ -155,19 +156,21 @@ class Account(Base):
         account_id: str,
         name: str | None = None,
         account_type: str = "stage",
-        session: OrmSession | None = None,
+        *,
+        session: OrmSession,
     ) -> None:
         """
         Create Account if it does not exist, nop otherwise
+
+        Sprint 48.1: ``session`` is required keyword-only (no more conn fallback).
         """
-        s = session or conn
-        if not s.query(cls).filter(cls.id == account_id).one_or_none():
+        if not session.query(cls).filter(cls.id == account_id).one_or_none():
             if not name:
                 raise ValueError(
                     f"Account id: {account_id} does not exist. Cannot create new account without a name"
                 )
             new_account = cls(id=account_id, name=name, type=account_type)
-            s.add(new_account)
+            session.add(new_account)
             logger.info(f"Created new account id: {account_id} name: {name} type: {account_type}")
 
 

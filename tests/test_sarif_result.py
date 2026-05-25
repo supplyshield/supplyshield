@@ -121,23 +121,17 @@ def test_sarif_result_uses_injected_session(empty_sarif_file):
 
 
 # ---------------------------------------------------------------------------
-# 2. Without an injected session, ``_s`` falls back to the legacy ``conn``.
+# 2. Sprint 48.1: SarifResult now requires a keyword-only ``session`` —
+#    constructor without one raises TypeError.
 # ---------------------------------------------------------------------------
-def test_sarif_result_falls_back_to_conn_when_no_session(empty_sarif_file):
-    from libinv.scanners.repository_scanner.sast import SarifResult as sr_mod
+def test_sarif_result_requires_session_keyword(empty_sarif_file):
     from libinv.scanners.repository_scanner.sast.SarifResult import SarifResult
 
-    sentinel = MagicMock(name="module_conn")
     source = MagicMock()
     source.value = "semgrep"
 
-    with patch.object(sr_mod, "conn", sentinel):
-        sr = SarifResult(_fake_config(), str(empty_sarif_file), source)
-
-        assert sr._session is None
-        # `_s` is a property; with no injected session it resolves to the
-        # patched module-level `conn`.
-        assert sr._s is sentinel
+    with pytest.raises(TypeError):
+        SarifResult(_fake_config(), str(empty_sarif_file), source)
 
 
 # ---------------------------------------------------------------------------

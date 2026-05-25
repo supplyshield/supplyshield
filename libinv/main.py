@@ -2,6 +2,7 @@ import json
 import logging
 import subprocess
 
+from libinv.base import ScopedSession
 from libinv.base import session_scope
 from libinv.env import IMAGE_SCAN_ENABLED
 from libinv.helpers import send_to_slack
@@ -40,7 +41,12 @@ def process_sqs_message(message_metadata: dict):
     message_type = message.get("type", "").casefold()
     if message_type:  # New feature. Handling of messages based on types
         if message_type == "bridge":
-            with Wasp.eat_caterpillar_message(message) as wasp:
+            # Sprint 48.1: eat_caterpillar_message now requires an explicit
+            # session. Use the thread-scoped session so the wasp lifecycle
+            # (eat -> repo_dir -> bridge -> throw on exit) stays bound to
+            # one session_scope() commit boundary inside ``__exit__``.
+            _bridge_session = ScopedSession()
+            with Wasp.eat_caterpillar_message(message, session=_bridge_session) as wasp:
                 try:
                     repository_dir = wasp.repo_dir
 

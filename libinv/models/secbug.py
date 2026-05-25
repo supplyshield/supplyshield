@@ -28,7 +28,6 @@ from sqlalchemy.orm import relationship
 from sqlalchemy.orm import synonym
 
 from libinv.base import Base
-from libinv.base import conn
 from libinv.models._base import TimestampMixin
 
 # Re-use the canonical constant from ``_legacy``. The constant lives
@@ -84,16 +83,17 @@ class Secbug(Base, TimestampMixin):
         return self.deleted_at is None
 
     @classmethod
-    def get(cls, id: str, session: OrmSession | None = None) -> "Secbug | None":
+    def get(cls, id: str, session: OrmSession) -> "Secbug | None":
+        # Sprint 48.1: session required (no more conn fallback).
         return cls.all_active(session=session).filter(cls.id == id).first()
 
     @classmethod
-    def get_any(cls, id: str, session: OrmSession | None = None) -> "Secbug | None":
+    def get_any(cls, id: str, session: OrmSession) -> "Secbug | None":
         """Return secbug with given id, even if deleted"""
-        s = session or conn
-        return s.query(cls).filter(cls.id == id).first()
+        # Sprint 48.1: session required (no more conn fallback).
+        return session.query(cls).filter(cls.id == id).first()
 
     @classmethod
-    def all_active(cls, session: OrmSession | None = None):
-        s = session or conn
-        return s.query(cls).filter(cls.deleted_at == None)  # noqa: E711
+    def all_active(cls, session: OrmSession):
+        # Sprint 48.1: session required (no more conn fallback).
+        return session.query(cls).filter(cls.deleted_at == None)  # noqa: E711

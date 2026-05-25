@@ -25,12 +25,11 @@ def populate_actionable_purl_versions() -> None:
         logger.info(f"Populating versions for {len(actionable_packages)} packages..")
 
         for package in actionable_packages:
-            # Note: package.fetch_and_store_versions() uses the module-level
-            # `conn` (scoped session) internally, which resolves to this same
-            # thread-local session. Per-row commits inside the model method
-            # may commit this outer session_scope early — pre-existing
-            # behavior, not introduced by this migration.
-            package.fetch_and_store_versions()
+            # Sprint 48.1: ``session`` is now required (keyword-only). Per-row
+            # commits inside the model method may commit this outer
+            # session_scope early — pre-existing behavior, not introduced by
+            # this migration.
+            package.fetch_and_store_versions(session=session)
 
 
 @cli.command
@@ -47,7 +46,8 @@ def scan_versions_in_use() -> None:
                     f"Skipping {package.package_url} as it already has known vulnerabilities."
                 )
                 return
-            package.scan_and_update_results()
+            # Sprint 48.1: pass the thread's scoped session explicitly.
+            package.scan_and_update_results(session=ScopedSession())
         finally:
             # Worker-thread session isolation (Sprint 0). Do NOT wrap the
             # outer executor in session_scope — that would bind the
@@ -116,14 +116,15 @@ def scan_latest_versions() -> None:
                     if version.get_safe_upgrade() is not None:
                         continue
 
-                    latest_package = actionable_package.get_latest()
+                    # Sprint 48.1: pass the outer session_scope().
+                    latest_package = actionable_package.get_latest(session=session)
                     if latest_package is None:
                         logger.warning(
                             f"No latest version found for {actionable_package.package_url}. Skipping."
                         )
                         continue
                     logger.info(f"Scanning latest version {latest_package.version}")
-                    latest_package.scan_and_update_results()
+                    latest_package.scan_and_update_results(session=session)
             except Exception as e:
                 logger.error(f"Error scanning latest version for {actionable_package.package_url}: {e}")
 
@@ -136,7 +137,8 @@ def rescan_failed_packages() -> None:
         scan_failed_packages = ActionablePackageAvailableVersion.get_scan_failed_packages()
         logger.info(f"Rescanning {len(scan_failed_packages)} packages..")
         for package in scan_failed_packages:
-            package.scan_and_update_results()
+            # Sprint 48.1: pass the outer session_scope().
+            package.scan_and_update_results(session=session)
 
 
 @cli.command
@@ -184,7 +186,10 @@ def populate_next_safe_versions() -> None:
                     )
                     continue
 
-                package.find_safe_version_in(potential_safe_upgrades)
+                # Sprint 48.1: pass the worker's scoped session.
+                package.find_safe_version_in(
+                    potential_safe_upgrades, session=ScopedSession()
+                )
         finally:
             # Worker-thread session isolation (Sprint 0).
             ScopedSession.remove()
@@ -218,7 +223,9 @@ def get_actionable_for(repository_id: int, environment: str) -> None:
                         package.available_version.version,
                         [
                             package.version
-                            for package in package.available_version.actionable.get_safe_versions()
+                            for package in package.available_version.actionable.get_safe_versions(
+                                session=session
+                            )
                         ],
                     ]
                 )
@@ -236,7 +243,8 @@ def scan_package(package_url: str) -> None:
         )
         for package in packages:
             logger.info(f"Scanning {package_url}@{package.version}..")
-            package.scan_and_update_results()
+            # Sprint 48.1: pass the outer session_scope().
+            package.scan_and_update_results(session=session)
 
 
 @cli.command("safe-version", help="Get the safe version for a package url")
@@ -258,7 +266,7 @@ def get_safe_version(package_url: str) -> None:
 @click.argument("git-url", type=str)
 def raise_sca_as_git_issue(git_url: str) -> None:
     with session_scope() as session:
-        repo = Repository.get_by_git_url(git_url)
+        repo = Repository.get_by_git_url(git_url, session=session)
         if not repo:
             return logger.error(f"Couldn't find {git_url} in database")
-        repo.raise_or_update_sca_issues()
+        repo.raise_or_update_sca_issues(session=session)

@@ -44,9 +44,9 @@ def new_actionable():
             session.refresh(actionable)
             if created or not actionable.available_versions:
                 logger.info(f"Onboarding or updating package {versionless_purl}")
-                # fetch_and_store_versions uses its own session but needs instance data
+                # Sprint 48.1: ``session`` is now required (keyword-only).
                 try:
-                    actionable.fetch_and_store_versions()
+                    actionable.fetch_and_store_versions(session=session)
                     # Refresh to see if we have versions now
                     session.expire_all()
                     session.refresh(actionable)

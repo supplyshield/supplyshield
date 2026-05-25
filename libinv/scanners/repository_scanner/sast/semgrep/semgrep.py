@@ -1,3 +1,4 @@
+from libinv.base import session_scope
 from libinv.project_language_detector import Project_language_detector
 from libinv.scanners.repository_scanner.sast.enums.CodeTech import CodeTech
 from libinv.scanners.repository_scanner.sast.enums.SastSourceEnum import SastSourceEnum
@@ -13,10 +14,17 @@ def main(args):
     semgrepRunner = SemgrepRunner(config)
 
     semgrepRunner.run()  # gives SarifResult Object
-    result = SarifResult(config, semgrepRunner.output_file, SastSourceEnum.SEMGREP)
+    # Sprint 48.1: SarifResult now requires a keyword-only ``session``.
+    with session_scope() as session:
+        result = SarifResult(
+            config,
+            semgrepRunner.output_file,
+            SastSourceEnum.SEMGREP,
+            session=session,
+        )
 
-    result.add_lob_module()  # add all modules ran to db
-    result.add_sarif_result_to_db()  # add sarif result to db
+        result.add_lob_module()  # add all modules ran to db
+        result.add_sarif_result_to_db()  # add sarif result to db
 
 
 def run_cicd(wasp, code_directory):

@@ -88,14 +88,16 @@ class _ConnDeprecationProxy:
     """Proxy that emits a one-shot DeprecationWarning on first use of `conn`.
 
     Sprint 0-12 migrated every libinv caller from `conn.<method>` to
-    `with session_scope() as session: session.<method>` or the
-    `s = session or conn` fallback inside methods that accept an
-    optional `session=` kwarg. The `conn` symbol is retained only for
-    that fallback (which uses `or conn` -- accesses `conn` only when
-    `session is None`).
+    `with session_scope() as session: session.<method>` or to helper
+    signatures that accept an optional `session=` kwarg with a
+    `s = session or conn` fallback. Sprint 48.1 eliminated all
+    14 of those fallbacks by making `session` required (either positional
+    or keyword-only) on every helper that previously used the pattern.
 
-    Any *direct* `conn.<method>` call surfaces here and warns. The
-    warning fires once per process to avoid log spam.
+    A handful of *direct* `conn.<method>` call sites still exist (CLI
+    health probe + Flask `/healthz` + `libinv.api.actionable._common`
+    legacy session pool). They all surface here and warn. The warning
+    fires once per process to avoid log spam.
     """
 
     _warned: ClassVar[bool] = False
@@ -123,10 +125,10 @@ class _ConnDeprecationProxy:
         return self._target(*args, **kwargs)
 
     def __bool__(self) -> bool:
-        # Used by `s = session or conn` -- must not warn on `bool(conn)`
-        # because that's the explicit fallback case Sprint 0-12 left in
-        # place. Return True so `or conn` resolves to `conn` itself
-        # when `session` is None/falsy.
+        # Pre-Sprint-48.1 `s = session or conn` callers depended on this
+        # returning True. Sprint 48.1 removed every such fallback site;
+        # the override is retained as a no-op safety net for any external
+        # mockers that may still rely on it.
         return True
 
 

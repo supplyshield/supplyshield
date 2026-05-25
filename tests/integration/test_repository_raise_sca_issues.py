@@ -138,7 +138,9 @@ def test_new_vuln_creates_new_github_issue(engine, repo, mock_vcs):
         "get_actionable_and_secure_versions",
         return_value=_actionables_with_results(2),
     ):
-        repo.raise_or_update_sca_issues(environment="stage", session=None)
+        from sqlalchemy.orm import Session as _OrmSession
+        with _OrmSession(bind=engine) as _s:
+            repo.raise_or_update_sca_issues(environment="stage", session=_s)
 
     # New issue is created, label is updated to the SCA red.
     assert mock_vcs.create_issue.called, "expected create_issue to fire"
@@ -167,7 +169,9 @@ def test_existing_vuln_with_open_issue_updates_in_place(engine, repo, mock_vcs):
         "get_actionable_and_secure_versions",
         return_value=_actionables_with_results(1),
     ):
-        repo.raise_or_update_sca_issues(environment="stage", session=None)
+        from sqlalchemy.orm import Session as _OrmSession
+        with _OrmSession(bind=engine) as _s:
+            repo.raise_or_update_sca_issues(environment="stage", session=_s)
 
     # Update path: update_issue called once, create not called, no close.
     assert mock_vcs.update_issue.called
@@ -190,7 +194,9 @@ def test_no_actionables_closes_existing_issue(engine, repo, mock_vcs):
     with patch.object(
         Actionable, "get_actionable_and_secure_versions", return_value=_no_actionables()
     ):
-        repo.raise_or_update_sca_issues(environment="stage", session=None)
+        from sqlalchemy.orm import Session as _OrmSession
+        with _OrmSession(bind=engine) as _s:
+            repo.raise_or_update_sca_issues(environment="stage", session=_s)
 
     mock_vcs.close_issue.assert_called_once_with(issue_url)
     assert not mock_vcs.create_issue.called
@@ -209,7 +215,9 @@ def test_no_actionables_and_no_existing_issue_is_noop(engine, repo, mock_vcs):
     with patch.object(
         Actionable, "get_actionable_and_secure_versions", return_value=_no_actionables()
     ):
-        repo.raise_or_update_sca_issues(environment="stage", session=None)
+        from sqlalchemy.orm import Session as _OrmSession
+        with _OrmSession(bind=engine) as _s:
+            repo.raise_or_update_sca_issues(environment="stage", session=_s)
 
     assert not mock_vcs.close_issue.called
     assert not mock_vcs.create_issue.called
@@ -246,8 +254,10 @@ def test_github_5xx_on_get_issues_aborts_gracefully(engine, repo, mock_vcs):
         "get_actionable_and_secure_versions",
         return_value=_actionables_with_results(1),
     ):
+        from sqlalchemy.orm import Session as _OrmSession
         with pytest.raises(TypeError):
-            repo.raise_or_update_sca_issues(environment="stage", session=None)
+            with _OrmSession(bind=engine) as _s:
+                repo.raise_or_update_sca_issues(environment="stage", session=_s)
 
     # No partial state: no create / update / close path completed.
     assert not mock_vcs.create_issue.called

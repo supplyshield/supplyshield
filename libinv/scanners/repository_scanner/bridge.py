@@ -3,7 +3,6 @@ import json
 from libinv.api.metrics import scan_duration_seconds
 from libinv.api.metrics import scan_failures_total
 from libinv.api.metrics import scan_invocations_total
-from libinv.base import conn
 from libinv.models import Account
 from libinv.models import Image
 from libinv.models import update_safely
@@ -18,9 +17,11 @@ def connect(
     image_name: str,
     image_digest: str,
     image_platform: str,
-    session=None,
+    *,
+    session,
 ):
-    s = session or conn
+    # Sprint 48.1: ``session`` is required keyword-only (no more conn fallback).
+    s = session
     commit = wasp.commit
     tag = wasp.tag
 
@@ -78,7 +79,7 @@ def connect(
     logger.info(f"[+] Wasp {wasp} ate ecr image ({image})")
 
 
-def connect_using_queue_message_agreement(wasp: Wasp, session=None):
+def connect_using_queue_message_agreement(wasp: Wasp, *, session):
     """
     Connect repository to its ECR image using data in wasp.
 
@@ -95,7 +96,8 @@ def connect_using_queue_message_agreement(wasp: Wasp, session=None):
     # try/except unchanged.
     with scan_duration_seconds.labels(type="repository_bridge").time():
         try:
-            s = session or conn
+            # Sprint 48.1: ``session`` is required keyword-only.
+            s = session
             message = json.loads(wasp.raw_message)
 
             for ecr_image in message["ecr_image"]:

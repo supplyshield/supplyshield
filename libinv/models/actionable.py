@@ -52,7 +52,6 @@ from sqlalchemy.schema import UniqueConstraint
 from univers.versions import MavenVersion
 
 from libinv.base import Base
-from libinv.base import conn
 from libinv.base import session_scope
 from libinv.env import PURLDB_API_URL
 from libinv.env import SCANCODEIO_API_KEY
@@ -194,8 +193,9 @@ class Actionable(Base):
             # Commit AFTER the bulk operation — not in the loop above.
             s.commit()
 
-    def fetch_and_store_versions(self, session: OrmSession | None = None) -> None:
-        s = session or conn
+    def fetch_and_store_versions(self, *, session: OrmSession) -> None:
+        # Sprint 48.1: ``session`` is required keyword-only (no more conn fallback).
+        s = session
         logger.info(f"Processing: {self.package_url}")
         try:
             query = {"packages": [{"purl": self.package_url}]}
@@ -282,13 +282,13 @@ class Actionable(Base):
         return sorted_versions
 
     @classmethod
-    def get_packages_without_versions(cls, session: OrmSession | None = None):
-        s = session or conn
+    def get_packages_without_versions(cls, *, session: OrmSession):
+        # Sprint 48.1: ``session`` is required keyword-only (no more conn fallback).
         subquery = select(1).where(
             ActionablePackageAvailableVersion.actionable_id == Actionable.uuid
         )
         query = select(Actionable).where(~exists(subquery))
-        return s.execute(query).scalars().all()
+        return session.execute(query).scalars().all()
 
     def get_versions_in_use(self, session):
         return list(
@@ -299,12 +299,12 @@ class Actionable(Base):
         )
 
     def get_safe_versions(self, session: OrmSession | None = None):
-        # Prefer eagerly-loaded relationship to avoid N+1 round trips when
-        # the caller pre-loaded `available_versions` (e.g. via selectinload
-        # in `get_actionable_and_secure_versions`). `"available_versions" in
-        # self.__dict__` is the canonical sentinel for "this collection has
-        # already been populated on the instance" — it does NOT trigger a
-        # lazy load (which `getattr(self, "available_versions")` would).
+        # Sprint 48.1: ``session`` is optional ONLY because eagerly-loaded
+        # relationships short-circuit before any SQL — when
+        # ``available_versions`` is already in ``self.__dict__`` no query
+        # runs. The SQL branch below now requires an explicit session;
+        # callers that hit that path without one get a clear TypeError
+        # instead of a silent ``conn`` fallback.
         if "available_versions" in self.__dict__:
             result = [
                 v
@@ -312,9 +312,13 @@ class Actionable(Base):
                 if v.vulns_count == 0 and v.scan_status == "SUCCESS"
             ]
             return sorted(result, key=lambda v: MavenVersion(v.version))
-        s = session or conn
+        if session is None:
+            raise TypeError(
+                "Actionable.get_safe_versions requires an explicit ``session`` "
+                "when ``available_versions`` is not eagerly loaded."
+            )
         result = list(
-            s.query(ActionablePackageAvailableVersion)
+            session.query(ActionablePackageAvailableVersion)
             .filter(ActionablePackageAvailableVersion.actionable_id == self.uuid)
             .filter(ActionablePackageAvailableVersion.vulns_count == 0)
             .filter(ActionablePackageAvailableVersion.scan_status == "SUCCESS")
@@ -335,9 +339,10 @@ class Actionable(Base):
         return versions[start_index : end_index + 1]
 
     def find_safe_version_in(
-        self, list_of_versions, session: OrmSession | None = None
+        self, list_of_versions, *, session: OrmSession
     ) -> None:
-        s = session or conn
+        # Sprint 48.1: ``session`` is required keyword-only (no more conn fallback).
+        s = session
         logger.info(f"Finding closest safe version for : {self.package_url}")
 
         if len(list_of_versions) == 0:
@@ -374,14 +379,20 @@ class Actionable(Base):
     def get_latest(
         self, session: OrmSession | None = None
     ) -> "ActionablePackageAvailableVersion | None":
-        # Prefer eagerly-loaded relationship to avoid N+1 round trips.
-        # See `get_safe_versions` for the `__dict__` sentinel rationale.
+        # Sprint 48.1: ``session`` is optional ONLY because eagerly-loaded
+        # relationships short-circuit before any SQL. The SQL branch below
+        # now requires an explicit session — callers that hit it without
+        # one get a clear TypeError instead of a silent ``conn`` fallback.
         if "available_versions" in self.__dict__:
             latest = [v for v in self.available_versions if v.is_latest]
             return latest[0] if latest else None
-        s = session or conn
+        if session is None:
+            raise TypeError(
+                "Actionable.get_latest requires an explicit ``session`` "
+                "when ``available_versions`` is not eagerly loaded."
+            )
         return (
-            s.query(ActionablePackageAvailableVersion)
+            session.query(ActionablePackageAvailableVersion)
             .filter(ActionablePackageAvailableVersion.actionable_id == self.uuid)
             .filter(ActionablePackageAvailableVersion.is_latest == True)
             .one_or_none()
@@ -759,12 +770,14 @@ class ActionablePackageAvailableVersion(Base):
             return session.query(cls).filter(cls.is_version_in_use == True).all()
 
     def scan_and_update_results(
-        self, session: OrmSession | None = None, is_rescan: bool = False
+        self, *, session: OrmSession, is_rescan: bool = False
     ) -> None:
         """ "
         The function triggers a scan for the package and updates the results.
+
+        Sprint 48.1: ``session`` is required keyword-only (no more conn fallback).
         """
-        s = session or conn
+        s = session
         logger.info(f"Scanning: {self}")
         if self.scan_status == "SUCCESS" and not is_rescan:
             logger.info(f"Scan already completed for: {self}")

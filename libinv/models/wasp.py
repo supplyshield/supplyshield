@@ -45,7 +45,6 @@ from sqlalchemy.orm import Session as OrmSession
 from sqlalchemy.orm import relationship
 
 from libinv.base import Base
-from libinv.base import conn
 from libinv.env import EXCLUDED_REPOS
 from libinv.env import LIBINV_TEMP_DIR
 from libinv.exceptions import MalformedCaterpillarMessage
@@ -186,7 +185,17 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
             trace = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
             self.throw(f"{exc_type} : {exc_value} : {trace}")
 
-        s = getattr(self, "_session", None) or conn
+        # Sprint 48.1: ``_session`` must have been set by
+        # ``eat_caterpillar_message`` (which is the only public entry that
+        # builds + persists a Wasp). If it's missing the caller skipped the
+        # constructor — surface that explicitly rather than silently falling
+        # back to the deprecated ``conn`` global.
+        s = getattr(self, "_session", None)
+        if s is None:
+            raise RuntimeError(
+                "Wasp.__exit__ called without an attached session; "
+                "use Wasp.eat_caterpillar_message() to construct Wasp instances."
+            )
         s.add(self)
         s.commit()
         logger.debug(f"Cleaning up wasp {self}")
@@ -201,7 +210,7 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
 
     @classmethod
     def eat_caterpillar_message(
-        cls, message: dict, session: OrmSession | None = None
+        cls, message: dict, *, session: OrmSession
     ) -> "Wasp | None":
         """
         Messages must be sent in the following format:
@@ -236,7 +245,8 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
         from libinv.models._legacy import Repository
         from libinv.models._legacy import get_or_create
 
-        s = session or conn
+        # Sprint 48.1: ``session`` is required keyword-only (no more conn fallback).
+        s = session
 
         if not is_valid_raw_message(message):
             raise MalformedCaterpillarMessage("Invalid wasp received")
@@ -286,7 +296,15 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
         """
         Throw some food out. Specify why any actions on wasp failed without failing entire libinv
         """
-        s = getattr(self, "_session", None) or conn
+        # Sprint 48.1: ``_session`` must have been set by
+        # ``eat_caterpillar_message``; surface a clear error rather than
+        # silently falling back to the deprecated ``conn`` global.
+        s = getattr(self, "_session", None)
+        if s is None:
+            raise RuntimeError(
+                "Wasp.throw called without an attached session; "
+                "use Wasp.eat_caterpillar_message() to construct Wasp instances."
+            )
         try:
             s.connection()
         except PendingRollbackError:
