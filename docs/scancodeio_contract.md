@@ -111,21 +111,90 @@ Verified against `scancode.io/scanpipe/api/views.py::ProjectViewSet`:
    SupplyShield-specific column. Does it already appear in upstream's
    `ProjectFilterSet`, or do we need a patch (and if so, fork or PR
    upstream)?
+
+   **STATUS: BLOCKED on upstream
+   `scanpipe.api.views.ProjectFilterSet.Meta.fields`** — verified in
+   Sprint 14 against scancode.io/scanpipe/api/views.py; the upstream
+   filter set does **not** accept `wasp_uuid_id`. The blocker text is
+   captured in two places at HEAD:
+
+   * `libinv/services/scancodeio/endpoints.py` lines 117-152 — the
+     `list_projects_for_wasp` method raises `NotImplementedError` with
+     the upstream-patch instructions inline.
+   * `libinv/api/compare_builds.py` lines 81-90 — the inline comment
+     enumerates the three resolution options (upstream patch /
+     SupplyShield-side proxy endpoint / wasp_uuid→project_uuid mapping
+     table). The SQL/ORM path remains live; the HTTP migration cannot
+     proceed until one of those three options lands.
+
 2. **Severity aggregate.** Should `get_severity_counts` be a dedicated
    upstream endpoint (faster, fewer round-trips) or client-side
    aggregation (zero upstream coupling)? The current CTE is fast
    because the DB does the JSONB work; pulling N packages back over
    HTTP just to count `CRITICAL/HIGH/...` substrings may regress.
+
+   **RESOLVED (Sprint 15) — client-side aggregation.** Implemented in
+   `libinv/services/scancodeio/endpoints.py::get_severity_counts` by
+   paginating `GET /api/projects/<uuid>/packages/` (page_size=1000)
+   and bucketing each package's `affected_by_vulnerabilities[*]`
+   severity field client-side. No upstream coupling, no new endpoint.
+   The N+1 cost is bounded by the same pagination cap used by the
+   `list_discovered_packages` path. If the regression bites in
+   production we can revisit — for now Sprint 21's first SCIO HTTP
+   migration ran through this path without issue.
+
 3. **Pagination defaults.** Upstream uses DRF's default page size (50?
    100?). Some projects in production have >10k discovered packages —
    `iter_discovered_packages` is mandatory; `list_*` will need a page
    size cap to avoid OOM.
+
+   **RESOLVED (Sprint 15) — `page_size=1000` cap on every list call,
+   `iter_*` follows `next` until exhausted.** Encoded at
+   `libinv/services/scancodeio/endpoints.py:173` (`params: Dict[str,
+   Any] = {"page_size": 1000}`) and the `next`-follow loop at
+   line ~215. `iter_discovered_packages` yields one DTO at a time so
+   memory stays bounded regardless of project size.
+
 4. **Auth.** Token auth via `Authorization: Token <key>` is assumed.
    Confirm that's how staging is configured before Sprint 15.
+
+   **RESOLVED (Sprint 15) — confirmed `Authorization: Token <key>`.**
+   `libinv/services/scancodeio/transport.py` sets
+   `session.headers["Authorization"] = f"Token {api_key}"` at session
+   construction time when `SCANCODEIO_API_KEY` is non-empty;
+   unauthenticated calls work for the local docker-compose dev stack.
+   See `docs/configuration.rst` for the `SCANCODEIO_API_KEY` /
+   `SCANCODEIO_URL` env var contract.
+
 5. **Concurrency.** Should the client hold a single `requests.Session`
    for the process, or one per request? The EPSS batch job is the
    hot path and benefits from connection reuse.
+
+   **RESOLVED (Sprint 15) — single `requests.Session` per client
+   instance.** `libinv/services/scancodeio/transport.py::build_session`
+   constructs one `requests.Session` (with retries + `Authorization`
+   header pre-set), and `get_default_client()` (in
+   `libinv/services/scancodeio/__init__.py`) memoises a single client
+   per process. The EPSS batch loop in `libinv/cli/epss.py`
+   (`_collect_cves_for_projects`, Sprint 38.1 bulk-fetch refactor)
+   reuses the same Session across all per-project requests, getting
+   keep-alive / TCP reuse for free.
+
 6. **Error semantics.** Today an SQL failure raises
    `SQLAlchemyError`. The HTTP path will raise `requests.HTTPError` —
    callers that swallow `SQLAlchemyError` need updating; that audit is
    part of Sprint 15.
+
+   **RESOLVED (Sprint 15) — `_request_json` raises
+   `requests.exceptions.HTTPError` (via `raise_for_status`) and
+   `requests.exceptions.RequestException` (network / timeout); call
+   sites updated.** See `libinv/services/scancodeio/transport.py:86`
+   (`except requests.exceptions.RequestException`) and `:109` (`except
+   requests.exceptions.HTTPError`). The three migrated call sites in
+   Sprints 21-23 (`libinv/cli/epss.py`,
+   `libinv/api/actionable/package_details.py`, and the SCIO migrations
+   in `libinv/api/compare_builds.py`) catch `requests.HTTPError` and
+   fall back to the SQL path while `LIBINV_SCIO_USE_HTTP` is the
+   opt-in (default `false`) flag. Sprint 53.1 (still TODO at the time
+   this resolution lands) flips the default to `true` once the
+   upstream `ProjectFilterSet` blocker on question 1 is unblocked.

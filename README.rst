@@ -480,11 +480,26 @@ Database migrations:
 🏗️ Architecture Diagram
 ^^^^^^^^^^^^^^^^^^^^^^^
 
-The following diagram illustrates the architecture of SupplyShield:
+The following diagram illustrates the high-level architecture of
+SupplyShield:
 
 .. image:: ./docs/images/architecture-simplified.png
    :alt: SupplyShield Architecture Simplified
    :align: center
+
+.. note::
+   The image above predates the Sprint 0-55 refactor and does **not**
+   reflect the current package layout (split ``libinv/models/`` package,
+   ``libinv/services/scancodeio/`` HTTP client, ``libinv/api/actionable/``
+   blueprint, alembic-managed schema, materialized view, Prometheus
+   ``/metrics``, ``/healthz`` + ``/readyz`` probes, Flask-Limiter, JSON
+   logging, request-ID propagation, etc.).
+
+   For the authoritative architecture description that matches the code
+   at HEAD, see `docs/architecture.rst </docs/architecture.rst>`_. A
+   refreshed diagram (rendered from that document) is tracked as Sprint
+   55.1 follow-up: ``TODO(sprint-55.1): regenerate architecture image
+   to match docs/architecture.rst``.
 
 👥 Contributors
 ^^^^^^^^^^^^^^^

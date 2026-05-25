@@ -1,7 +1,7 @@
 # Changelog
 
 All notable changes to SupplyShield. This file documents the audit-driven
-refactor across sprints 0-24, each landed as a separate commit on the
+refactor across sprints 0-52, each landed as a separate commit on the
 `sprint-0/critical-fixes` branch. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
@@ -9,7 +9,7 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 Sprint numbers in parentheses link a bullet back to its originating commit
 for traceability.
 
-## [Unreleased] — Sprints 0-24
+## [Unreleased] — Sprints 0-52
 
 ### Security
 
@@ -575,3 +575,245 @@ worth tracking. They are listed here to keep the audit trail honest.
   into the aggregate query if a shift from inner-join to left-join
   semantics is acceptable.
 - `Secbug.key` synonym at `models.py:465` — possibly unused ORM glue.
+
+### Observability (Sprints 25-28)
+
+- **`libinv_scan_invocations_total{type}` wired (Sprint 25)** — three
+  scan entry points (`scan_image_index`, `connect_using_queue_message_
+  agreement`, `run_cdxgen_scan`) now increment the Sprint-24 counter at
+  entry, before the work runs, so crashed scans still surface in the
+  metric. 6 new tests cover happy-path and crash-still-increments for
+  each scan type.
+- **`libinv_scan_failures_total{type, error_class}` (Sprint 26)** — new
+  Counter wrapping scan exceptions. `error_class` uses
+  `type(exc).__name__` so cardinality stays bounded by the exception
+  classes actually thrown. Increments + re-raises on every scan path's
+  failure branch.
+- **`libinv_scan_duration_seconds{type}` Histogram (Sprint 27)** — new
+  Histogram with explicit buckets spanning 1s → 1h (cdxgen seconds →
+  scancodeio minutes) plus `+inf` for overflow. Wraps each scan entry
+  point via `with scan_duration_seconds.labels(type=...).time():`.
+  Shares the `type` label with `scan_invocations_total` /
+  `scan_failures_total` so PromQL can join them.
+- **`libinv_sast_findings_total{severity, tool}` Counter (Sprint 28)** —
+  emitted from `SarifResult.add_sarif_result_to_db` after each commit
+  on both insert and update paths. Severity normalised via
+  `_normalize_sarif_severity` (case-fold + allowlist → "unknown")
+  to keep cardinality bounded; `tool` reads
+  `runs[0].tool.driver.name` with a defensive fallback.
+
+### Reliability (Sprints 25-29)
+
+- **CLI submodule shadowing fix (Sprint 25)** — `libinv/cli/__init__.py`
+  replaced 11 `from libinv.cli.X import Y` lines with `from . import
+  <submodule>`. The Click `@cli.command()` side-effects still register
+  the commands with the parent group, but `import libinv.cli.daemon`
+  now resolves to the SUBMODULE (with `_request_shutdown` etc.) instead
+  of the Click `Command` object.
+- **3 latent `SarifResult` bug fixes (Sprint 28)** — fd-leak in
+  `__init__` (`json.load(open(...))` → `with open(...)`);
+  `json.load(record.extras)` (expects a file) → `json.loads` (string
+  parser) for the equal-endpoints branch; `KeyError` on missing
+  `runs[0].tool.driver.rules` array → `.get("rules", [])` with a
+  warning log.
+- **`SarifResult.rulemetadata` KeyError guard (Sprint 29)** — follow-on
+  to Sprint 28's missing-rules fix: line 127 now uses
+  `self.rulemetadata.get(ruleid, {})` with a warning log instead of
+  `self.rulemetadata[ruleid]`. The persistence loop now survives BOTH
+  SARIF tools that omit the `rules` array entirely AND SARIF results
+  that reference a `ruleId` not present in `rules` (semgrep with
+  `--severity` filters applied).
+
+### Infrastructure (Sprints 26, 27)
+
+- **Alembic migrations integration test (Sprint 26)** — new
+  `tests/integration/test_alembic_migrations.py` (3 tests). Asserts
+  `upgrade head` creates `libinv.alembic_version` + stamps
+  `0002_fk_indexes`; `downgrade -1` → `upgrade head` is reversible;
+  the Sprint-2 FK index `ix_epss_cve_updated_at` appears in
+  `pg_indexes` post-upgrade. Subprocess-based so we exercise the real
+  alembic entry point, not an in-process recursion.
+- **CI pip download caching (Sprint 26)** — `actions/cache@v4` step
+  inserted between `Set up Python` and `Install Build Tools` in both
+  `.github/workflows/coverage.yml` and `.github/workflows/linting.yml`.
+  Cache key uses `hashFiles('requirements.txt', 'setup.cfg',
+  'pyproject.toml')`; estimated ~30s saved per CI run on cache hit.
+
+### Documentation (Sprints 27)
+
+- **Sphinx deployment + troubleshooting pages (Sprint 27)** — new
+  `docs/deployment.rst` (k8s quickstart with pod spec, liveness /
+  readiness probes, Prometheus ServiceMonitor, alembic upgrade order,
+  secrets handling, cron + `LIBINV_REQUEST_ID` propagation, JSON
+  logging) and `docs/troubleshooting.rst` (9 recipes covering 503
+  auth-not-configured, conn DeprecationWarning, SCIO 404, alembic on
+  fresh DB, mypy blocking, etc.). Added to `docs/index.rst` toctree.
+
+### Mypy strictness (Sprint 29)
+
+- **`valid-type` removed from the `libinv.api.*` / `libinv.scanners.*`
+  / `libinv.cli.*` mypy override.** 5 codes still suppressed (was 6).
+  The real error this exposed —
+  `libinv/scanners/image_scanner/image_index.py::pull_images_if_not_
+  exist` had `-> ["Image"]` (a list literal in the annotation) — was
+  corrected to `-> Iterator["ImageTarBall"]` with the matching
+  `Iterator` import added.
+
+### Tests (Sprints 25, 26, 27, 28, 29, 30, 31, 32)
+
+- Sprint 25: +6 scan_invocations tests
+  (`tests/test_scan_metrics.py::happy + crash for image / bridge /
+  cdxgen`). Unit total: 175 → 181.
+- Sprint 26: +3 scan_failures tests + 3 gated alembic tests (skip
+  cleanly without `TEST_DATABASE_URL`). Unit total: 181 → 184.
+- Sprint 27: +3 scan_duration Histogram tests + 7 SarifResult unit
+  tests pinning the Sprint-20 session-injection contract. Unit total:
+  184 → 193.
+- Sprint 28: +3 fixed-bug regression tests + 5 sast_findings counter
+  tests (insert / update / case-fold / missing-level / commit-rolled-
+  back). Unit total: 193 → 202.
+- Sprint 29: +1 rulemetadata-missing-ruleId regression test. Unit
+  total: 202 → 203.
+- Sprint 30: pytest-postgresql integration fixtures in
+  `tests/conftest.py` (database factory + alembic `upgrade head`
+  inside the integration session fixture). Foundation for the
+  Sprint 31-32 integration suite.
+- Sprint 31: 5 E2E integration tests covering SQS → daemon → DB → API
+  (moto SQS + the real Flask app + DB-backed fixtures), plus
+  behavioural coverage of the 44-row `repositories` listing.
+- Sprint 32: CLI + handler integration tests (`metapod` import path,
+  `bridge.connect_using_queue_message_agreement`, SCA-issue-creation,
+  wasp `__exit__` parser), with `xfail` markers on pre-existing
+  failures so the suite is green and we don't silently regress later.
+
+## [Unreleased] — Sprints 33-52 (post-audit remediation, in flight)
+
+### Schema discipline (Sprints 33-34)
+
+- **Alembic index parity audit (Sprint 33)** — every `Index(...)`
+  declared in the ORM is now declared in alembic too; missing
+  declarations added; `alembic check` step added to CI to catch future
+  drift.
+- **`nullable=False` audit + tightening migration (Sprint 34.1)** —
+  ORM-declared `nullable=False` columns that the DB still allowed
+  `NULL` for are now tightened via a new alembic revision.
+- **`epss.epss_date` `String(20)` → `Date` (Sprint 33-34)** — column
+  type widened to a real Date with the corresponding migration and
+  caller updates.
+- **`String(N)` audit (Sprint 33-34)** — oversized text columns
+  (commit field etc.) tightened with the corresponding migrations.
+
+### Performance (Sprints 35-38)
+
+- **Pool tuning (Sprint 35-36)** — `pool_size=10`, `max_overflow=20`,
+  `pool_recycle=1800`, `pool_use_lifo=True`.
+- **Global `statement_timeout` `before_request` hook (Sprint 35-36)** —
+  removes the per-route `SET statement_timeout` boilerplate.
+- **`ThreadPoolExecutor(max_workers=4) → 2 sites` cap (Sprint 35-36)** —
+  bound the per-process worker fan-out where it had grown unbounded.
+- **`_compute_statistics` decomposition + parallelisation (Sprint
+  35-36)** — broken into per-group helpers and the 6 group queries now
+  run concurrently via `ThreadPoolExecutor`. SQL bug surfaced and
+  fixed in the same pass.
+- **`LIBINV_STRICT_LAZY` + `lazy="raise_on_sql"` policy hook (Sprint
+  37)** — opt-in for N+1 detection in dev / test.
+- **34 `relationship()` declarations audited + `selectinload` at
+  traversal sites (Sprint 37)** — eliminates the lazy-load N+1s that
+  the new policy hook would otherwise raise on.
+- **`cli/epss.py::_collect_cves_for_projects` bulk fetch (Sprint
+  38.1)** — eliminates per-project HTTP round-trips through the
+  SCIO client.
+- **`Actionable.populate` + `fetch_and_store_versions` → `INSERT ON
+  CONFLICT` (Sprint 38.2)** — replaces the previous row-by-row
+  `merge` loop.
+
+### Architecture (Sprints 39-48)
+
+- **`libinv/models.py` → `libinv/models/` package + `_base.py`
+  extract (Sprint 39)** — Image, ImagePackageAssociation, Layer,
+  LatestImage extracted to `models/image.py` in the same pass.
+- **Package / Vulnerability / EPSS domains extracted (Sprint 40)** —
+  `models/package.py`, `models/vulnerability.py`, `models/epss.py`.
+- **Wasp / Actionable / Repository extraction (Sprint 41 phase 3a)**
+  — `models/wasp.py`, `models/actionable.py`, and Repository /
+  Account / DeploymentCheckpoint split into 3 files.
+- **Secbug + SAST extraction + `_legacy` cleanup (Sprint 41 phase
+  3b)** — `models/secbug.py`, `models/sast.py`. The legacy
+  `models.py` shim removed; `models/__init__.py` is now <50 lines of
+  re-exports.
+- **`scancodeio_client.py` → `libinv/services/scancodeio/` package
+  (Sprint 42.1 + 42.2)** — `transport.py` (Session + retries +
+  `_request_json` mypy fix at line 225 closed).
+- **`scancodeio/dtos.py` + `scancodeio/endpoints.py` (Sprint 42.3 +
+  42.4)** — TypedDicts + per-endpoint methods; the package re-exports
+  the public façade preserving the old import path.
+- **EPSS CLI service extraction (Sprint 43.1 + 43.2)** —
+  `--all-actionable-cves` and `calculate-package-epss` workflows moved
+  to `libinv/services/epss/`.
+- **Query builders + EPSS cyclomatic decomp (Sprint 43.3 + 44)** —
+  `RepositoryListingQuery` builder + `repositories_listing` refactor;
+  `PackageDetailsQuery` builder + `package_details` refactor;
+  per-function cyclomatic complexity in `libinv/cli/epss.py` now
+  under 10. `jira_integration` session signatures normalised.
+- **`sca_actionable_items` materialized view recovery (Sprint 45)** —
+  alembic migration writes the view with a unique index. Previously
+  flagged as deferred in the Sprints 0-24 section; now landed.
+- **EPSS row pruning (Sprint 46.3)** — `LIBINV_EPSS_RETENTION_DAYS`
+  env var drives a pruning job; tests cover the cutoff boundary.
+- **`Repository_ActionablePackageAvailableVersion` rename (Sprint
+  46.4)** — class renamed; the old name retained as an alias for
+  backwards compatibility.
+- **`scio_models` reflection guard (Sprint 48.2)** — the import-time
+  `sqlalchemy.inspect` reflection now only runs when
+  `LIBINV_SCIO_USE_HTTP` is unset, decoupling boot from upstream
+  schema shape when the HTTP path is on.
+- **`print()` → `click.echo()` (Sprint 48.3)** —
+  `cli/checkpoint.py` (4 sites) + `cli/actionable.py:223` switched
+  away from `print()` so output respects Click's redirection.
+
+### Security (Sprints 47, 51, 52)
+
+- **`shell=True` elimination in cron scheduler (Sprint 47.1)** —
+  `cron_scheduler.py:31` switched from `shell=True` to
+  `shlex.split` + `shell=False`. The init.sh hardening pass in
+  Sprint 47.3 went through the same audit on the entrypoint script.
+- **Flask-Limiter + rate-limited `/v3/*` routes (Sprint 51.1)** —
+  Flask-Limiter wired into `libinv/api/app.py` with per-route
+  `@limiter.limit` decorators on the `/v3/*` routes.
+- **`/metrics` authentication (Sprint 51.2)** — Bearer-token gate via
+  `LIBINV_METRICS_TOKEN`; `/metrics` returns 401 without the token.
+- **Daemon DB-connect retry (Sprint 51.3)** — exponential backoff on
+  startup, capped at 5 minutes, so transient DB unavailability at
+  boot doesn't crash-loop the daemon container.
+- **Crons SIGTERM graceful shutdown (Sprint 52.1 + 52.3)** — the cron
+  scheduler now installs a SIGTERM handler that flags shutdown and
+  drains in-flight jobs cleanly before exit. Sprint 52.3 covers the
+  matching upload-to-s3 ClientError → log + counter + raise hardening.
+
+### Tooling notes
+
+- **`pylintrc` deleted (Sprint 55.4)** — the 20KB `pylintrc` file was
+  unused; pylint is not referenced from `.github/`, `docs/`, or the
+  `Makefile`. Linting is handled by `ruff` + `black` + `mypy` +
+  `bandit` (Sprints 17-19).
+- **`etc/pre-commit` deleted (Sprint 55.4)** — superseded by
+  `.pre-commit-config.yaml` (Sprint 18). The old 22-byte
+  `etc/pre-commit` shell script (`make check`) is no longer wired
+  into any hook installer.
+
+### Test counts (cumulative)
+
+| Sprint | Unit | Integration | Total |
+|--------|------|-------------|-------|
+| 16     | 130  | 18          | 148   |
+| 24     | 175  | 18          | 193   |
+| 25     | 181  | 18          | 199   |
+| 26     | 184  | 21          | 205   |
+| 27     | 193  | 21          | 214   |
+| 28     | 202  | 21          | 223   |
+| 29     | 203  | 21          | 224   |
+| 30-32  | 203  | 21+         | 224+  |
+
+Sprints 30-52 land in a follow-up branch (`post-sprint-29 audit
+remediation`); the ledger lives at
+`.wave/LEDGER_2026-05-24_2357.md`.
