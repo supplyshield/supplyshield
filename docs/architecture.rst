@@ -250,12 +250,16 @@ Each environment becomes one child partition; a ``DEFAULT`` partition
 absorbs unknown / newly added environments until a follow-up migration
 splits them out.
 
-**Status.** ``TODO(sprint-56+)``: the actual ``CREATE TABLE ... PARTITION
-BY LIST (environment)`` migration is pending operator-side stats from
-production — at the time of this writing we cannot query the integration
-DB from CI to confirm the gate (the ephemeral pytest-postgresql DB is
-seeded per-test and never crosses the 50M / 20 GB threshold). Re-evaluate
-after the next quarterly inventory snapshot.
+**Status.** Skeleton revision landed
+(``alembic/versions/0009_partition_stub.py`` — no-op until gate trips).
+When operator stats trip the gate, expand the ``upgrade()`` body using
+the SQL sketch in the migration's docstring (``CREATE TABLE ... LIKE ...
+INCLUDING ALL PARTITION BY LIST (environment)``, per-environment
+``CREATE TABLE ... PARTITION OF ...``, then an ``ALTER TABLE`` rename
+swap). The pytest-postgresql ephemeral DB used in CI never crosses the
+50M / 20 GB threshold, so we cannot meaningfully exercise the real
+partition migration from this repo — the no-op is intentional and
+re-evaluation tracks the next quarterly inventory snapshot.
 
 ************
 Test layout

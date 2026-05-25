@@ -405,31 +405,113 @@ These jobs run automatically and don't require manual intervention.
 🏗️ Architecture
 ^^^^^^^^^^^^^^^
 
-Top-level layout of the codebase after the Sprint 0-16 refactor:
+Top-level layout of the codebase after the Sprint 0-55 refactor wave
+(post-Wave-4 split: ``models`` is a package, ``services/scancodeio`` is a
+package, actionable query builders live under
+``libinv/api/actionable/queries/``)::
 
-- ``libinv/`` — main application package (models, helpers, env, daemon entry).
-- ``libinv/api/`` — Flask web application. The old 1218-LOC ``actionable.py``
-  god-route was split into the ``libinv/api/actionable/`` blueprint package
-  (``dashboards.py``, ``repositories.py``, ``statistics.py``,
-  ``package_details.py``, ``package_scan.py``) during Sprint 3. Global
-  ``X-API-Token`` auth (Sprint 0) and the ``X-Request-Id`` middleware
-  (Sprint 16) are wired in ``libinv/api/app.py``.
-- ``libinv/services/`` — service layer extracted from ``models.py``.
-  ``issue_reporter.py`` renders GitHub issue content (Sprint 2);
-  ``scancodeio_client.py`` is the HTTP client for ScanCode.io introduced
-  in Sprints 14-15.
-- ``libinv/scanners/`` — image and repository scanners.
+    libinv/
+    ├── api/                       # Flask web application
+    │   ├── app.py                 # X-API-Token auth + X-Request-Id middleware
+    │   ├── auth.py
+    │   ├── request_id.py
+    │   ├── metrics.py             # Prometheus /metrics endpoint
+    │   ├── health.py              # /healthz + /readyz probes
+    │   ├── graph.py
+    │   ├── compare_builds.py
+    │   ├── onboard_package.py
+    │   ├── wasp.py
+    │   ├── actionable/            # blueprint package (split from 1218-LOC god route)
+    │   │   ├── dashboards.py
+    │   │   ├── repositories.py
+    │   │   ├── statistics.py
+    │   │   ├── package_details.py
+    │   │   ├── package_scan.py
+    │   │   ├── _common.py
+    │   │   └── queries/           # query builders (Wave-4 split)
+    │   │       ├── package_details.py
+    │   │       └── repository_listing.py
+    │   ├── static/
+    │   └── templates/
+    ├── models/                    # ORM models (package, was models.py monolith)
+    │   ├── _base.py
+    │   ├── _legacy.py
+    │   ├── actionable.py
+    │   ├── epss.py
+    │   ├── image.py
+    │   ├── package.py
+    │   ├── repository.py
+    │   ├── sast.py
+    │   ├── secbug.py
+    │   ├── vulnerability.py
+    │   └── wasp.py
+    ├── services/                  # service layer extracted from models.py
+    │   ├── issue_reporter.py      # GitHub issue rendering (Sprint 2)
+    │   └── scancodeio/            # ScanCode.io HTTP client (Sprints 14-15)
+    │       ├── endpoints.py
+    │       ├── transport.py
+    │       └── dtos.py
+    ├── scanners/
+    │   ├── image_scanner/         # ECR / SBOM / SCA / base-image pipelines
+    │   │   ├── scanner.py
+    │   │   ├── ecr.py
+    │   │   ├── sbom.py
+    │   │   ├── sca.py
+    │   │   ├── base_image.py
+    │   │   ├── image_index.py
+    │   │   └── image_tarball.py
+    │   └── repository_scanner/    # SQS bridge + cdx / scancodeio / SAST
+    │       ├── bridge.py          # SQS handler
+    │       ├── cdx_scanner.py
+    │       ├── scancodeio.py
+    │       └── sast/              # SarifResult + semgrep + enums
+    │           ├── SarifResult.py
+    │           ├── semgrep/
+    │           └── enums/
+    ├── cli/                       # Click-based CLI entry points
+    │   ├── actionable.py
+    │   ├── daemon.py
+    │   ├── bridge.py
+    │   ├── epss.py
+    │   ├── checkpoint.py
+    │   ├── process_message.py
+    │   ├── query.py
+    │   ├── scan_stage_ecr_image.py
+    │   ├── secbugs.py
+    │   ├── update_all_images_with_base_image.py
+    │   └── import_and_improve_from_metapod.py
+    ├── blast_radius/              # blast-radius analysis (cdx.py)
+    ├── base.py                    # Base + session_scope (declarative_base subclass)
+    ├── env.py                     # config loader (JSON env vars, DB_STRING)
+    ├── helpers.py
+    ├── main.py                    # CLI dispatcher
+    ├── jira_integration.py
+    ├── logger.py                  # JSON or human-readable formatter
+    ├── vcs.py                     # VCS / GitHub App auth
+    ├── crane.py
+    ├── cron_scheduler.py
+    ├── project_language_detector.py
+    ├── scio_models.py             # ScanCode.io reflected models
+    ├── sqs.py
+    └── exceptions.py
 
-  * ``image_scanner/`` — ECR / SBOM / SCA / base-image pipelines.
-  * ``repository_scanner/`` — ``bridge.py`` SQS handler and supporting code.
-- ``libinv/cli/`` — Click-based CLI entry points
-  (``actionable``, ``daemon``, ``bridge``, ``epss``, ``checkpoint``, etc.).
-- ``alembic/`` — schema migrations. ``versions/0001_baseline.py`` stamps the
-  existing ``init.sql`` schema; ``0002_fk_indexes.py`` adds 17 FK indexes
-  + 2 composite indexes via ``CREATE INDEX CONCURRENTLY`` (Sprint 2).
-- ``tests/`` — DB-free unit tests + doctests (Sprint 3).
-- ``tests/integration/`` — DB-backed integration tests (Sprint 4); gated on
-  ``TEST_DATABASE_URL`` and skipped cleanly when unset.
+    alembic/versions/              # schema migrations (head: 0009_partition_stub)
+    ├── 0001_baseline.py           # stamps the existing init.sql schema
+    ├── 0002_fk_indexes.py         # 17 FK + 2 composite indexes (CONCURRENTLY)
+    ├── 0003_epss_date_to_date_type.py
+    ├── 0004_string_n_tightening.py
+    ├── 0005_nullable_tightening.py
+    ├── 0006_sca_actionable_view.py     # materialized view for Metabase
+    ├── 0007_vulnerability_fix_versions.py
+    ├── 0008_vulnerability_related.py
+    └── 0009_partition_stub.py     # Sprint 56 — no-op skeleton awaiting partition gate
+
+    tests/                         # unit tests + doctests (no DB required)
+    tests/integration/             # DB-backed tests (gated on TEST_DATABASE_URL)
+
+For the deeper narrative — request lifecycle, sequence diagrams,
+partitioning gate, materialized view refresh cadence, observability
+hooks — see `docs/architecture.rst </docs/architecture.rst>`_.
 
 🧪 Testing
 ^^^^^^^^^^
@@ -488,18 +570,13 @@ SupplyShield:
    :align: center
 
 .. note::
-   The image above predates the Sprint 0-55 refactor and does **not**
-   reflect the current package layout (split ``libinv/models/`` package,
-   ``libinv/services/scancodeio/`` HTTP client, ``libinv/api/actionable/``
-   blueprint, alembic-managed schema, materialized view, Prometheus
-   ``/metrics``, ``/healthz`` + ``/readyz`` probes, Flask-Limiter, JSON
-   logging, request-ID propagation, etc.).
-
-   For the authoritative architecture description that matches the code
-   at HEAD, see `docs/architecture.rst </docs/architecture.rst>`_. A
-   refreshed diagram (rendered from that document) is tracked as Sprint
-   55.1 follow-up: ``TODO(sprint-55.1): regenerate architecture image
-   to match docs/architecture.rst``.
+   The image above predates the Sprint 0-55 refactor wave and does
+   **not** reflect the current package layout. The ASCII tree in the
+   Architecture section above is grep-friendly and stays in sync with
+   the actual repository. For the authoritative narrative
+   description — request lifecycle, sequence diagrams, partitioning
+   gate, materialized view refresh cadence, observability hooks — see
+   `docs/architecture.rst </docs/architecture.rst>`_.
 
 👥 Contributors
 ^^^^^^^^^^^^^^^
