@@ -43,9 +43,6 @@ ENV PIP_DEFAULT_TIMEOUT=300
 RUN pip install --no-cache-dir --upgrade pip && \
     make install
 
-# Add venv to PATH so we don't need to source activate
-ENV PATH=/app/venv/bin:$PATH
-
 # Set shell for proper script execution
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -72,15 +69,16 @@ RUN curl -fsSL https://bazel.build/bazel-release.pub.gpg | gpg --dearmor > bazel
     rm -rf /var/lib/apt/lists/*
 
 # 7. Install Go
-RUN curl -fsSL https://go.dev/dl/go1.22.4.linux-amd64.tar.gz -o go1.22.4.linux-amd64.tar.gz && \
-    tar -C /usr/local -xzf go1.22.4.linux-amd64.tar.gz && \
-    rm go1.22.4.linux-amd64.tar.gz
+RUN curl -fsSL https://go.dev/dl/go1.24.2.linux-amd64.tar.gz -o go1.24.2.linux-amd64.tar.gz && \
+    tar -C /usr/local -xzf go1.24.2.linux-amd64.tar.gz && \
+    rm go1.24.2.linux-amd64.tar.gz
 
-ENV PATH=/usr/local/go/bin:/root/.sdkman/candidates/maven/3.9.8/bin/:$PATH
+ENV GOPATH=/root/go
+ENV PATH=$GOPATH/bin:/usr/local/go/bin:/root/.sdkman/candidates/maven/3.9.8/bin/:$PATH
 
 # 5. Copy the rest of the source tree LAST, so source code changes don't bust dependency layer cache
 COPY . .
 
-RUN chmod -R 777 /app
+RUN chmod -R 777 /app && mkdir -p /root/go /root/.cache && chmod -R 777 /root/go /root/.cache
 
 CMD ["make", "run"]

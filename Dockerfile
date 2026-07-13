@@ -25,7 +25,7 @@ RUN apt-get update && \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/* && \
     npm install npm@latest -g
-EXPOSE 8000
+EXPOSE 5000
 COPY . .
 RUN make python-deps-dev && \
     make docs

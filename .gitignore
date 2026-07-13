@@ -70,3 +70,4 @@ docs/source/*
 docs/_build/*
 !docs/source/.gitkeep
 .coverage
+libinv/scanners/image_scanner/image_index.py

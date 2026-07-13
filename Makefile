@@ -1,9 +1,10 @@
-PYTHON_EXE=python3
+PYTHON_EXE=python3.10
 GRYPE_VERSION=v0.54.0
 SYFT_VERSION=v0.60.3
 CRANE_VERSION=v0.12.1
 VENV=venv
 ACTIVATE?=. ${VENV}/bin/activate
+VIRTUALENV_PYZ=etc/third_party/virtualenv.pyz
 OS=Linux
 ARCH=arm64
 
@@ -31,9 +32,6 @@ crane:
 		| tar xvzf - -C etc/third_party crane
 
 python-deps-dev: virtualenv
-	@echo "-> Upgrade pip/setuptools for Python 3.13"
-	@${ACTIVATE}; python -m pip install --upgrade pip setuptools wheel
-
 	@echo "-> Install python deps"
 	@${ACTIVATE}; pip install -e .
 
@@ -43,8 +41,8 @@ cdxgen:
 	npm install --prefix etc/third_party/ @cyclonedx/cdxgen-plugins-bin
 
 virtualenv:
-	@echo "-> Bootstrap venv using Python's built-in venv"
-	@${PYTHON_EXE} -m venv ${VENV}
+	@echo "-> Bootstrap the virtualenv with PYTHON_EXE=${PYTHON_EXE}"
+	@${PYTHON_EXE} ${VIRTUALENV_PYZ} ${VENV} --prompt libinv
 
 clean:
 	rm etc/third_party/grype
@@ -69,7 +67,7 @@ check:
 	@${ACTIVATE}; black --check .
 
 db:
-	${ACTIVATE}; cd libinv; alembic upgrade head
+	${ACTIVATE}; cd src; alembic upgrade head
 
 init:
 	sh init.sh
@@ -83,7 +81,7 @@ run:
 	@${ACTIVATE}; libinv --debug --verbose daemon
 
 runserver:
-	@${ACTIVATE}; gunicorn -w 4 'libinv.api.app:app' --bind 0.0.0.0:5000
+	@${ACTIVATE}; gunicorn -w 4 'libinv.api.app:app' --bind 0.0.0.0:5000 --timeout 120
 
 crons:
 	make init
