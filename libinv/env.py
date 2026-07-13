@@ -1,4 +1,3 @@
-import base64
 import json
 import os
 from pathlib import Path
@@ -20,6 +19,9 @@ API_DOCS_FOLDER = os.getenv("API_DOCS_FOLDER", default="/app/docs/_build/html")
 
 AWS_REGION = os.getenv("AWS_DEFAULT_REGION")
 SQS_QUEUE_NAME = os.getenv("SQS_QUEUE_NAME")
+DEPRADAR_SQS_QUEUE = os.getenv("DEPRADAR_SQS_QUEUE")
+PRIORITY_SQS_QUEUE_NAME = os.getenv("PRIORITY_SQS_QUEUE_NAME")
+PRIORITY_QUEUE_MESSAGE_TEMPLATE = os.getenv("PRIORITY_QUEUE_MESSAGE_TEMPLATE", "")
 S3_BUCKET_NAME = os.getenv("S3_BUCKET_NAME")
 
 GIT_SSH_KEY = os.getenv("GIT_SSH_KEY")
@@ -30,9 +32,11 @@ SLACK_URL = os.getenv("SLACK_URL")
 SERVICE_METADATA_URL = os.getenv("SERVICE_METADATA_URL")
 
 GO_PRIVATE = os.getenv("GO_PRIVATE")
+GONOSUMCHECK = os.getenv("GONOSUMCHECK", default=GO_PRIVATE)
+GONOSUMDB = os.getenv("GONOSUMDB", default=GO_PRIVATE)
 SCANCODEIO_URL = os.getenv("SCANCODEIO_URL")
 SCANCODEIO_API_KEY = os.getenv("SCANCODEIO_API_KEY")
-SCANCODE_PIPELINES = ["load_sbom", "find_vulnerabilities", "find_actionables"]
+SCANCODE_PIPELINES = ["load_sbom", "find_vulnerabilities", "fetch_licenses", "find_actionables"]
 
 JIRA_URL = os.getenv("JIRA_URL")
 JIRA_USER = os.getenv("JIRA_USER")
@@ -51,17 +55,26 @@ IMAGE_SCAN_ENABLED = os.getenv("IMAGE_SCAN_ENABLED", default=False)
 JAVA_HOME = json.loads(os.getenv("JAVA_HOME", "{}"))
 BASE_IMAGE_JAVA_VERSION_MAPPING = json.loads(os.getenv("BASE_IMAGE_JAVA_VERSION_MAPPING", "{}"))
 
+FETCH_LICENSE = os.getenv("FETCH_LICENSE", default="false")
+
 LIBINV_TEMP_DIR = os.getenv("LIBINV_TEMP_DIR", default=f"{HOME_DIR}/scans")
 
 GITHUB_APP_APP_ID = os.getenv("GITHUB_APP_APP_ID")
 GITHUB_APP_INSTALLATION_ID = os.getenv("GITHUB_APP_INSTALLATION_ID")
 GITHUB_APP_PRIVATE_KEY_FILE = os.getenv(
-    "GITHUB_APP_PRIVATE_KEY_FILE", default=f"/{HOME_DIR}/.github_app.pem"
+    "GITHUB_APP_PRIVATE_KEY_FILE", default=f"{HOME_DIR}/.github_app.pem"
 )
 
 BITBUCKET_APP_TOKEN = os.getenv("BITBUCKET_APP_TOKEN")
 LIBINV_SERVER = os.getenv("LIBINV_WEB_URL")
 PURLDB_API_URL = os.getenv("PURLDB_API_URL", "")
 JOBS = json.loads(os.getenv("JOBS", "{}"))
+
+DEPLOYMENT_STATUS_PROVIDER = os.getenv("DEPLOYMENT_STATUS_PROVIDER", "")
+
+INFRA_ACCOUNT_ID = os.getenv("INFRA_ACCOUNT_ID", "")
+EXCLUDED_PACKAGE_SUBSTRINGS = [
+    s.strip() for s in os.getenv("EXCLUDED_PACKAGE_SUBSTRINGS", "").split(",") if s.strip()
+]
 
 

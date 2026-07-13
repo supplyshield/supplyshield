@@ -52,7 +52,9 @@ if TYPE_CHECKING:
 from libinv.base import Base
 from libinv.base import Session
 from libinv.base import conn
+from libinv.env import EXCLUDED_PACKAGE_SUBSTRINGS
 from libinv.env import EXCLUDED_REPOS
+from libinv.env import INFRA_ACCOUNT_ID
 from libinv.env import LIBINV_SERVER
 from libinv.env import LIBINV_TEMP_DIR
 from libinv.env import PURLDB_API_URL
@@ -62,16 +64,12 @@ from libinv.exceptions import ConflictingInfoError
 from libinv.exceptions import MalformedCaterpillarMessage
 from libinv.helpers import case_insensitive_dict
 from libinv.helpers import explode_git_url
-try:
-    from libinv.scio_models import DiscoveredPackage
-except Exception:  # pragma: no cover - fallback for bootstrap when scanpipe tables missing
-    DiscoveredPackage = None
+from libinv.scio_models import DiscoveredPackage
 from libinv.vcs import BitBucketApp
 from libinv.vcs import GitHubApp
 
 MAX_LENGTH_LICENSE = 150
 MAX_LENGTH_VULNERABILITY_DESCRIPTION = 500
-ORGSRE_ACCOUNT_ID = "orgsre"
 
 logger = logging.getLogger(__name__)
 logger.level = logging.DEBUG
@@ -154,7 +152,7 @@ class Image(Base, TimestampMixin):
 
     @classmethod
     def get_all_dev_image_ids(cls, session):
-        ids = session.query(Image.id).filter(Image.account_id != ORGSRE_ACCOUNT_ID)
+        ids = session.query(Image.id).filter(Image.account_id != INFRA_ACCOUNT_ID)
         return list(map(lambda x: x[0], ids))  # because sqlachemy returns tuples in ids
 
 
@@ -300,8 +298,16 @@ class Repository(Base):
             raise NotImplementedError(f"Repository provider: {self.provider} not implemented")
 
     def clone(self, target_dir):
-        self.vcs.authenticate()
-        return self.vcs.clone(self.url, target_dir)
+        if self.provider == "bitbucket.org":
+            bitbucket = BitBucketApp()
+            bitbucket.authenticate()
+            return bitbucket.clone(self.url, target_dir)
+        elif self.provider == "github.com":
+            github = GitHubApp()
+            github.authenticate()
+            return github.clone(self.url, target_dir)
+        else:
+            raise NotImplementedError(f"Repository provider: {self.provider} not implemented")
 
     @classmethod
     def get_by_git_url(cls, git_url):
@@ -407,8 +413,7 @@ class LatestImage(Base):
         considered
         """
         session.execute(delete(LatestImage))
-        stmt = text(
-            """
+        stmt = text("""
         INSERT INTO latest_images
         SELECT
               images.id, images.account_id
@@ -434,8 +439,7 @@ class LatestImage(Base):
                       AND images.platform = finder.platform
                       AND images.created_at
                           = finder.created_at;
-           """
-        )
+           """)
         session.execute(stmt, {"checkpoint": checkpoint})
 
 
@@ -494,7 +498,7 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
     __tablename__ = "wasps"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
-    uuid = Column(String(36), nullable=False, unique=True, default=uuid4)
+    uuid = Column(String(36), nullable=False, unique=True, default=lambda: str(uuid4()))
     repository_id = Column(ForeignKey("libinv.repositories.id", onupdate="CASCADE"))
     tag = Column(String(128))
     commit = Column(String(128))
@@ -654,20 +658,11 @@ class Wasp(Base, TimestampMixin):  # Wasp eats caterpillars
         logger.debug(f"[*] Cloning {self.repository.url}")
         target_dir = Path(self.project_dir, f"{repository.name}-{commit[:10]}")
         Path(target_dir).mkdir(exist_ok=True)
-        repo = None
         try:
             print("Trying to clone now..", flush=True)
             repo = repository.clone(target_dir)
-            if repo is None:
-                raise ValueError(f"repository.clone() returned None for {repository.url}")
         except GitCommandError as e:
             logger.error(e)
-            self.throw(f"failed to clone repository: {repository.url}")
-            raise
-        except Exception as e:
-            logger.error(f"Unexpected error during clone: {e}")
-            self.throw(f"failed to clone repository: {repository.url} - {str(e)}")
-            raise
         try:
             repo.git.checkout(commit)
         except GitCommandError:
@@ -747,7 +742,9 @@ class Actionable(Base):
 
     __tablename__ = "safe_actionable"
 
-    uuid = Column(String(36), nullable=False, unique=True, default=uuid4, primary_key=True)
+    uuid = Column(
+        String(36), nullable=False, unique=True, default=lambda: str(uuid4()), primary_key=True
+    )
     package_url = Column(String(300), nullable=False, unique=True)
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
@@ -860,8 +857,18 @@ class Actionable(Base):
             .all()
         )
 
-    def get_safe_versions(self):
-        with Session() as session:
+    def get_safe_versions(self, session=None):
+        if session is None:
+            with Session() as session:
+                result = list(
+                    session.query(ActionablePackageAvailableVersion)
+                    .filter(ActionablePackageAvailableVersion.actionable_id == self.uuid)
+                    .filter(ActionablePackageAvailableVersion.vulns_count == 0)
+                    .filter(ActionablePackageAvailableVersion.scan_status == "SUCCESS")
+                    .all()
+                )
+                return sorted(result, key=lambda v: MavenVersion(v.version))
+        else:
             result = list(
                 session.query(ActionablePackageAvailableVersion)
                 .filter(ActionablePackageAvailableVersion.actionable_id == self.uuid)
@@ -917,8 +924,16 @@ class Actionable(Base):
 
         conn.commit()
 
-    def get_latest(self):
-        with Session() as session:
+    def get_latest(self, session=None):
+        if session is None:
+            with Session() as session:
+                return (
+                    session.query(ActionablePackageAvailableVersion)
+                    .filter(ActionablePackageAvailableVersion.actionable_id == self.uuid)
+                    .filter(ActionablePackageAvailableVersion.is_latest == True)
+                    .one_or_none()
+                )
+        else:
             return (
                 session.query(ActionablePackageAvailableVersion)
                 .filter(ActionablePackageAvailableVersion.actionable_id == self.uuid)
@@ -1177,7 +1192,9 @@ class ActionablePackageAvailableVersion(Base):
 
     __tablename__ = "actionable_package_available_versions"
 
-    uuid = Column(String(36), nullable=False, unique=True, default=uuid4, primary_key=True)
+    uuid = Column(
+        String(36), nullable=False, unique=True, default=lambda: str(uuid4()), primary_key=True
+    )
     scan_status = Column(String(20), nullable=False)
     package_url = Column(String(300), nullable=False)
     version = Column(String(100), nullable=False)
@@ -1219,9 +1236,6 @@ class ActionablePackageAvailableVersion(Base):
         self.vulns_count = vulns_count
 
     def _get_vulnerabilities_count(self):
-        if not self.scancode_project_uuid or DiscoveredPackage is None:
-            return 0
-
         with Session() as session:
             result = (
                 session.query(
@@ -1242,8 +1256,7 @@ class ActionablePackageAvailableVersion(Base):
 
     @property
     def vulnerabilitiy_severities(self):
-        query = text(
-            """
+        query = text("""
             WITH RECURSIVE severities(level) AS (
                 VALUES ('critical'), ('high'), ('medium'), ('low'), ('unknown')
             ),
@@ -1275,8 +1288,7 @@ class ActionablePackageAvailableVersion(Base):
                     WHEN 'low' THEN 4 
                     ELSE 5 
                 END;
-            """
-        )
+            """)
 
         with Session() as session:
             if self.scancode_project_uuid is None:
@@ -1284,6 +1296,143 @@ class ActionablePackageAvailableVersion(Base):
             result = session.execute(query, {"project_id": self.scancode_project_uuid})
             data = [{"severity_level": row.severity_level, "count": row.count} for row in result]
             return data
+
+    @property
+    def vulnerabilitiy_severities_epss(self):
+        """
+        Calculate vulnerability severities based on EPSS scores, consistent with package details page.
+        Uses the same classification logic as package_details() function.
+        """
+        if self.scancode_project_uuid is None:
+            return None
+
+        with Session() as session:
+            # Get all packages for this project from scanpipe_discoveredpackage
+            discovered_packages = (
+                session.query(DiscoveredPackage)
+                .filter(DiscoveredPackage.project_id == self.scancode_project_uuid)
+                .all()
+            )
+
+            # Extract CVEs from vulnerability data
+            cve_set = set()
+            for discovered_pkg in discovered_packages:
+                vulns = getattr(discovered_pkg, "affected_by_vulnerabilities", [])
+                if vulns:
+                    for vuln in vulns:
+                        try:
+                            aliases = vuln.get("aliases", [])
+                            cve_ids = [alias for alias in aliases if alias.startswith("CVE-")]
+                            for cve in cve_ids:
+                                cve_set.add(cve.upper())
+                        except (AttributeError, TypeError):
+                            continue
+
+            if not cve_set:
+                return [
+                    {"severity_level": "critical", "count": 0},
+                    {"severity_level": "high", "count": 0},
+                    {"severity_level": "medium", "count": 0},
+                    {"severity_level": "low", "count": 0},
+                    {"severity_level": "unknown", "count": 0},
+                ]
+
+            # Get EPSS scores for these CVEs
+            from libinv.models import EPSS
+
+            epss_records = session.query(EPSS).filter(EPSS.cve.in_(list(cve_set))).all()
+            epss_dict = {record.cve: record for record in epss_records}
+
+            # Build CVE details list with CVSS fallback
+            cve_details = []
+            cve_to_vulnerability_data = {}  # Map CVE to vulnerability data for CVSS lookup
+
+            # First pass: collect CVE to vulnerability data mapping
+            for discovered_pkg in discovered_packages:
+                vulns = getattr(discovered_pkg, "affected_by_vulnerabilities", [])
+                if vulns:
+                    for vuln in vulns:
+                        try:
+                            aliases = vuln.get("aliases", [])
+                            cve_ids = [alias for alias in aliases if alias.startswith("CVE-")]
+                            for cve in cve_ids:
+                                cve_upper = cve.upper()
+                                if cve_upper not in cve_to_vulnerability_data:
+                                    cve_to_vulnerability_data[cve_upper] = vuln
+                        except (AttributeError, TypeError):
+                            continue
+
+            # Second pass: build CVE details with EPSS and CVSS fallback
+            for cve in cve_set:
+                epss_record = epss_dict.get(cve)
+                epss_score = epss_record.epss_score if epss_record else None
+
+                # If no EPSS score, try to get CVSS score from vulnerability data
+                cvss_score = None
+                if not epss_score and cve in cve_to_vulnerability_data:
+                    vuln_data = cve_to_vulnerability_data[cve]
+                    try:
+                        # Try to extract CVSS base score from vulnerability data
+                        cvss_data = vuln_data.get("cvss", [])
+                        if cvss_data and isinstance(cvss_data, list) and len(cvss_data) > 0:
+                            cvss_metrics = cvss_data[0].get("metrics", {})
+                            cvss_score = cvss_metrics.get("baseScore")
+                    except (AttributeError, TypeError, KeyError):
+                        pass
+
+                cve_details.append(
+                    {
+                        "cve": cve,
+                        "epss_score": epss_score,
+                        "cvss_score": cvss_score,
+                    }
+                )
+
+            def classify_severity(cve_detail):
+                """Classify severity based on EPSS score with CVSS fallback"""
+                epss_score = cve_detail.get("epss_score")
+                cvss_score = cve_detail.get("cvss_score")
+
+                # Primary: Use EPSS score if available
+                if epss_score is not None:
+                    if epss_score > 0.8:
+                        return "critical"
+                    elif epss_score > 0.7:
+                        return "high"
+                    elif epss_score > 0.5:
+                        return "medium"
+                    else:
+                        return "low"
+
+                # Fallback: Use CVSS score if available
+                elif cvss_score is not None:
+                    if cvss_score >= 9.0:
+                        return "critical"
+                    elif cvss_score >= 7.0:
+                        return "high"
+                    elif cvss_score >= 4.0:
+                        return "medium"
+                    elif cvss_score > 0:
+                        return "low"
+
+                # No score available
+                return "unknown"
+
+            # Calculate severity counts using classification function
+            classified_cves = [(cve, classify_severity(cve)) for cve in cve_details]
+            critical_count = len([c for c, s in classified_cves if s == "critical"])
+            high_count = len([c for c, s in classified_cves if s == "high"])
+            medium_count = len([c for c, s in classified_cves if s == "medium"])
+            low_count = len([c for c, s in classified_cves if s == "low"])
+            unknown_count = len([c for c, s in classified_cves if s == "unknown"])
+
+            return [
+                {"severity_level": "critical", "count": critical_count},
+                {"severity_level": "high", "count": high_count},
+                {"severity_level": "medium", "count": medium_count},
+                {"severity_level": "low", "count": low_count},
+                {"severity_level": "unknown", "count": unknown_count},
+            ]
 
     @property
     def score(self):
@@ -1416,7 +1565,7 @@ class ActionablePackageAvailableVersion(Base):
         Return a set of CVE IDs affecting this package version based on
         scanpipe discovered packages linked via scancode_project_uuid.
         """
-        if not self.scancode_project_uuid or DiscoveredPackage is None:
+        if not self.scancode_project_uuid:
             return set()
 
         discovered_packages = (
@@ -1450,7 +1599,9 @@ class Repository_ActionablePackageAvailableVersion(Base):
 
     __tablename__ = "repository_actionable_package_versions_association"
 
-    uuid = Column(String(36), nullable=False, unique=True, default=uuid4, primary_key=True)
+    uuid = Column(
+        String(36), nullable=False, unique=True, default=lambda: str(uuid4()), primary_key=True
+    )
     wasp_uuid = Column(ForeignKey("libinv.wasps.uuid", onupdate="CASCADE", ondelete="CASCADE"))
     actionable_package_version_id = Column(
         ForeignKey(
@@ -1601,11 +1752,7 @@ def is_valid_raw_message(message):
 
 
 def is_blacklist(package_name):
-    blacklisted_substrings = []
-    for substring in blacklisted_substrings:
-        if substring in package_name:
-            return True
-    return False
+    return any(sub in package_name for sub in EXCLUDED_PACKAGE_SUBSTRINGS)
 
 
 class EPSS(Base):
@@ -1729,6 +1876,51 @@ class EPSS(Base):
                 session.add(new_record)
 
         session.commit()
+
+
+class ServiceStatus(Base, TimestampMixin):
+    """Latest live status per (repository, environment) from the deployment status provider."""
+
+    __tablename__ = "service_statuses"
+    __table_args__ = (
+        UniqueConstraint("repository_id", "environment", name="uq_service_status_repo_env"),
+        {"schema": "libinv"},
+    )
+
+    id = Column(Integer, primary_key=True)
+    repository_id = Column(Integer, ForeignKey("libinv.repositories.id"), nullable=False, index=True)
+    environment = Column(String, nullable=False)
+
+    # Status classification
+    status = Column(String)           # active | no_tracking_data | error
+    health_status = Column(String)    # HEALTHY | UNHEALTHY | ...
+    error = Column(String)
+
+    # ECS service counts
+    running_count = Column(Integer)
+    desired_count = Column(Integer)
+    healthy_targets = Column(Integer)
+    total_targets = Column(Integer)
+
+    # Deployment info
+    task_definition = Column(String)
+    cluster_name = Column(String)
+    compute_type = Column(String)
+
+    # Downtime risk
+    downtime_risk = Column(String)
+    downtime_reason = Column(String)
+
+    # HTTP error rates (0.0–1.0)
+    rate_2xx = Column(Float)
+    rate_4xx = Column(Float)
+    rate_5xx = Column(Float)
+    total_requests = Column(Integer)
+
+    # Timestamps
+    captured_at = Column(DateTime(timezone=True))          # when we fetched this
+    last_updated_dashboard = Column(String)                # lastUpdated from provider payload
+    last_healthy_at = Column(DateTime(timezone=True))      # last time status was observed healthy
 
 
 def sort_versions(version_list):

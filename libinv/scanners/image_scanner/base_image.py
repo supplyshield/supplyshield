@@ -7,7 +7,7 @@ from sqlalchemy import and_
 
 from libinv.base import Session
 from libinv.base import conn
-from libinv.models import ORGSRE_ACCOUNT_ID
+from libinv.env import INFRA_ACCOUNT_ID
 from libinv.models import Image
 from libinv.models import Layer
 from libinv.scanners.image_scanner.image_tarball import ImageTarBall
@@ -87,7 +87,7 @@ def detect_and_update_base_image(session: Session, image: Image):
                 Layer.id == first_layer.id,
                 Layer.seq == first_layer.seq,
                 Image.id != image.id,
-                Image.account_id == ORGSRE_ACCOUNT_ID,
+                Image.account_id == INFRA_ACCOUNT_ID,
             )
         )
     )
