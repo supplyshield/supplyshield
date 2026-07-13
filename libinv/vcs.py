@@ -89,7 +89,7 @@ class GitHubApp(VcsApp):
         self.api_url = "https://api.github.com"
         self.app_id = GITHUB_APP_APP_ID
         self.installation_id = GITHUB_APP_INSTALLATION_ID
-        logger.debug(f"[*] Trying to open {GITHUB_APP_PRIVATE_KEY_FILE}")
+        logger.info(f"[*] Trying to open {GITHUB_APP_PRIVATE_KEY_FILE}")
         self.private_key = open(GITHUB_APP_PRIVATE_KEY_FILE).read()
         self.token_endpoint = f"/app/installations/{self.installation_id}/access_tokens"
 

@@ -2,7 +2,7 @@ import json
 import logging
 import subprocess
 
-from libinv.env import IMAGE_SCAN_ENABLED
+from libinv.env import IMAGE_SCAN_ENABLED, DEPRADAR_SQS_QUEUE
 from libinv.helpers import send_to_slack
 from libinv.helpers import upload_to_s3
 from libinv.scanners.image_scanner import scan_ecr_image
@@ -12,10 +12,12 @@ from libinv.scanners.repository_scanner import connect_using_queue_message_agree
 from libinv.scanners.repository_scanner import run_cdxgen_scan
 from libinv.scanners.repository_scanner import run_scancodeio
 from libinv.scanners.repository_scanner.sast import semgrep
-from libinv.sqs import delete_message
+from libinv.sqs import send_message, get_queue_url
 
 logger = logging.getLogger("libinv.main")
 
+def passthrough_message(message):
+    return send_message(get_queue_url(DEPRADAR_SQS_QUEUE), message["Body"])
 
 def process_message(message_metadata):
     return process_sqs_message(message_metadata)
@@ -41,14 +43,15 @@ def process_sqs_message(message_metadata: dict):
                     upload_to_s3(file_name=str(cdx_file), object_name=cdx_s3_object_name)
 
                     run_scancodeio(wasp, cdx_s3_object_name)
-                    delete_message(message_metadata["ReceiptHandle"])
 
                     semgrep.run_cicd(wasp, repository_dir)
 
                 except subprocess.TimeoutExpired as exc:
                     logger.error("Timed out!", message)
                     wasp.throw(f"Timed out: {exc}")
-                    return
+                    raise  # Re-raise to allow daemon to handle appropriately
+        else:
+            logger.warning(f"Unrecognized message type '{message_type}'. Message will be deleted: {json.dumps(message)}")
 
     elif IMAGE_SCAN_ENABLED:  # Legacy way of handling
         image_name = message["detail"]["repository-name"]
@@ -73,7 +76,8 @@ def process_sqs_message(message_metadata: dict):
                     # Uncomment for local run
                     # credentials=get_credentials_from_aws_okta(),
                 )
-        delete_message(message_metadata["ReceiptHandle"])
+    else:
+        logger.warning(f"IMAGE_SCAN_ENABLED is False and no message type specified. Message will be deleted: {json.dumps(message)}")
 
 
 if __name__ == "__main__":

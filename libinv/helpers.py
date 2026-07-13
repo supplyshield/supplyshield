@@ -181,7 +181,7 @@ def delete_message_where_repository_url_contains(token: str, message_metadata: d
         if message_type == "bridge":
             repository_url = message["repository"]["url"]
             if token in repository_url:
-                delete_message(message_metadata["ReceiptHandle"])
+                delete_message(message_metadata["ReceiptHandle"], message_metadata.get("_QueueUrl"))
                 logger.info("[*] Deleted message with url: {message['repository_url']}")
     return
 

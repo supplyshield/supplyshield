@@ -1,5 +1,5 @@
 from libinv.base import Session
-from libinv.main import process_message
+from libinv.main import process_message, passthrough_message
 from libinv.models import DeploymentCheckpoint
 from libinv.models import Image
 from libinv.models import Repository

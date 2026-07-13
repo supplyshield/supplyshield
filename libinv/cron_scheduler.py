@@ -73,7 +73,7 @@ def schedule_jobs():
 
 
 def main():
-    logger.debug("Starting cron scheduler")
+    logger.info(f"Starting cron scheduler, Jobs: {JOBS}")
     run_all_once()
     schedule_jobs()
     while True:
