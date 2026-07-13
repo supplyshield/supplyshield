@@ -374,7 +374,6 @@
               document.getElementById("secreview-container").style.display = "block"
 
               if (called_from_init === true) {
-                win = window.open("https://web/new_secreview");
                 setTimeout((e)=>{
                   data = {
                     "title":"{{ result.lob_metadata.repository.pod | title }} | {{ result.lob_metadata.module | upper }}",

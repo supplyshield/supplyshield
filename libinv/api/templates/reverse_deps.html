@@ -1,0 +1,195 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Reverse Dependency Search - Security Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="{{ url_for('static', filename='actionables-dashboard.css') }}">
+    <link rel="stylesheet" href="{{ url_for('static', filename='repositories-listing.css') }}">
+</head>
+
+<body>
+    {% include 'includes/navbar.html' %}
+
+    <div class="page-header">
+        <div class="container-fluid px-4">
+            <h1 class="page-title">Reverse Dependency Search</h1>
+            <p class="page-subtitle">Find which repositories use a given package across all environments</p>
+        </div>
+    </div>
+
+    <div class="container-fluid px-4">
+
+        <!-- Filters Section -->
+        <div class="alert alert-info mb-4">
+            <form method="GET" id="filterForm">
+                <div class="row align-items-end">
+                    <div class="col-md-2">
+                        <label for="package_name" class="form-label"><strong>Package Name</strong></label>
+                        <input type="text" class="form-control" id="package_name" name="package_name"
+                               placeholder="e.g. spring-boot, lodash"
+                               value="{{ current_filters.package_name }}" autofocus>
+                    </div>
+                    <div class="col-md-2">
+                        <label for="package_namespace" class="form-label"><strong>Namespace / Group ID</strong></label>
+                        <input type="text" class="form-control" id="package_namespace" name="package_namespace"
+                               placeholder="e.g. org.springframework"
+                               value="{{ current_filters.package_namespace }}">
+                    </div>
+                    <div class="col-md-2">
+                        <label for="package_type" class="form-label"><strong>Package Type</strong></label>
+                        <select class="form-select" id="package_type" name="package_type">
+                            <option value="">All Types</option>
+                            {% for pt in package_types %}
+                            <option value="{{ pt }}" {% if current_filters.package_type == pt %}selected{% endif %}>
+                                {{ pt }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label for="environment" class="form-label"><strong>Environment</strong></label>
+                        <select class="form-select" id="environment" name="environment">
+                            <option value="">All Environments</option>
+                            {% for env in environments %}
+                            <option value="{{ env }}" {% if current_filters.environment == env %}selected{% endif %}>
+                                {{ env }}
+                            </option>
+                            {% endfor %}
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label for="package_version" class="form-label"><strong>Version</strong></label>
+                        <input type="text" class="form-control" id="package_version" name="package_version"
+                               placeholder="e.g. 3.1.4"
+                               value="{{ current_filters.package_version }}">
+                    </div>
+                    <div class="col-md-1 mt-2">
+                        <button type="submit" class="btn btn-primary w-100">Search</button>
+                    </div>
+                </div>
+                <div class="row mt-2">
+                    <div class="col-12">
+                        <a href="/deps/v1/reverse" class="btn btn-link p-0">Clear all filters</a>
+                    </div>
+                </div>
+            </form>
+        </div>
+
+        {% set searched = current_filters.package_name or current_filters.package_namespace %}
+
+        {% if not searched %}
+        <div class="no-actionables">
+            <div class="success-icon">🔍</div>
+            <h5>Enter a package name or namespace to search</h5>
+            <p class="text-muted mb-0">
+                Find every repository that depends on a specific package, across all environments and ecosystems.
+            </p>
+        </div>
+
+        {% elif total == 0 %}
+        <div class="no-actionables">
+            <div class="success-icon">📭</div>
+            <h5>No repositories found</h5>
+            <p class="text-muted mb-0">
+                No repositories use a package matching your search criteria. Try adjusting your filters.
+            </p>
+        </div>
+
+        {% else %}
+
+        <!-- Results Table -->
+        <div class="priority-section">
+            <div class="priority-header" style="background-color: var(--primary-blue); border-color: var(--primary-blue); color: white;">
+                <span>Results</span>
+                <span>{{ total }} result{{ 's' if total != 1 }}{% if total_pages > 1 %} &mdash; page {{ page }} of {{ total_pages }}{% endif %}</span>
+            </div>
+
+            <table class="table priority-table">
+                <thead>
+                    <tr>
+                        <th width="20%">Repository</th>
+                        <th width="15%">Organization</th>
+                        <th width="12%">Pod / Subpod</th>
+                        <th width="10%">Environment</th>
+                        <th width="25%">Package</th>
+                        <th width="10%">Version</th>
+                        <th width="8%">Last Scanned</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in results %}
+                    <tr>
+                        <td>
+                            <div class="d-flex flex-column">
+                                <a href="/actionable/v3/?repository_id={{ row.repository_id }}&env={{ row.environment }}" class="package-name-link">
+                                    <strong class="package-name">{{ row.repository_name }}</strong>
+                                </a>
+                                <small class="text-muted">{{ row.provider }}/{{ row.org }}</small>
+                            </div>
+                        </td>
+                        <td>
+                            <strong class="organization-name">{{ row.org }}</strong>
+                        </td>
+                        <td>
+                            {% if row.pod %}
+                            <strong class="pod-name">{{ row.pod }}</strong>
+                            {% if row.subpod %}<br><span class="subpod-name">{{ row.subpod }}</span>{% endif %}
+                            {% else %}
+                            <span class="text-muted">N/A</span>
+                            {% endif %}
+                        </td>
+                        <td>
+                            <a href="/actionable/v3/?repository_id={{ row.repository_id }}&env={{ row.environment }}"
+                               class="btn-simple success">
+                                {{ row.environment or '—' }}
+                            </a>
+                        </td>
+                        <td>
+                            <span class="badge bg-info text-dark me-1" style="font-size:0.7rem;">{{ row.package_type }}</span>
+                            {% if row.package_namespace %}<span class="text-muted small">{{ row.package_namespace }}/</span>{% endif %}<strong class="package-name">{{ row.package_name }}</strong>
+                        </td>
+                        <td><code>{{ row.package_version or '—' }}</code></td>
+                        <td>
+                            {% if row.latest_scan_at %}
+                            <small>{{ row.latest_scan_at.strftime('%Y-%m-%d') }}</small>
+                            {% else %}
+                            <span class="text-muted">—</span>
+                            {% endif %}
+                        </td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+
+        <!-- Pagination -->
+        {% if total_pages > 1 %}
+        <nav aria-label="Results pagination" class="my-4">
+            <ul class="pagination justify-content-center">
+                <li class="page-item {% if page == 1 %}disabled{% endif %}">
+                    <a class="page-link" href="?{{ base_qs }}&page={{ page - 1 }}">&laquo; Previous</a>
+                </li>
+                {% for p in range([1, page - 2]|max, [total_pages + 1, page + 3]|min) %}
+                <li class="page-item {% if p == page %}active{% endif %}">
+                    <a class="page-link" href="?{{ base_qs }}&page={{ p }}">{{ p }}</a>
+                </li>
+                {% endfor %}
+                <li class="page-item {% if page == total_pages %}disabled{% endif %}">
+                    <a class="page-link" href="?{{ base_qs }}&page={{ page + 1 }}">Next &raquo;</a>
+                </li>
+            </ul>
+        </nav>
+        {% endif %}
+
+        {% endif %}
+    </div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.1.3/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="{{ url_for('static', filename='repositories-listing.js') }}"></script>
+
+</body>
+
+</html>

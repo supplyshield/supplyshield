@@ -25,16 +25,14 @@ def get_scancode_results(wasp_id):
 
     try:
         packages = session.execute(
-            text(
-                """select 
+            text("""select 
             CONCAT('pkg:',sd.type,'/', sd.namespace,'/', sd.name,'@', sd.version,'?', sd.qualifiers) as "purl", affected_by_vulnerabilities 
             from 
             scanpipe_project sp 
             left join scanpipe_discoveredpackage sd on sd.project_id = sp.uuid
             where wasp_uuid_id = :wasp_id
             order by purl 
-            """
-            ),
+            """),
             {"wasp_id": wasp_id},
         ).fetchall()
         return packages

@@ -35,38 +35,124 @@
         </div>
 
         <!-- Commit Details Section -->
-        {% if commit_id and commit_id != "N/A" %}
-        <div class="alert alert-secondary" role="alert">
-            <div class="d-flex justify-content-between align-items-center">
-                <div>
-                    <strong>Build Information:</strong>
-                    <br>
-                    <span class="text-muted">Commit ID: {{ commit_id }}</span>
-                    {% if jenkins_url and jenkins_url != "N/A" %}
-                    <br>
-                    <a href="{{ jenkins_url }}" target="_blank" class="btn btn-sm btn-outline-primary mt-2">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="me-1">
+        {% if (commit_id and commit_id != "N/A") or svc_status %}
+        <div class="alert alert-secondary p-3" role="alert">
+            <style>
+                .build-info-label {
+                    font-size: 0.68rem;
+                    font-weight: 600;
+                    letter-spacing: 0.06em;
+                    text-transform: uppercase;
+                    color: #6c757d;
+                    margin-bottom: 3px;
+                }
+                .build-info-value {
+                    font-size: 0.92rem;
+                    font-weight: 500;
+                    color: #212529;
+                }
+                .build-info-block {
+                    padding-right: 2rem;
+                    border-right: 1px solid #dee2e6;
+                    margin-right: 2rem;
+                }
+                .build-info-block:last-of-type {
+                    border-right: none;
+                }
+                .svc-dot { width:9px; height:9px; border-radius:50%; display:inline-block; vertical-align:middle; margin-right:4px; }
+                .svc-dot-healthy   { background:#198754; }
+                .svc-dot-unhealthy { background:#dc3545; }
+                .svc-dot-grey      { background:#adb5bd; }
+            </style>
+            <div class="d-flex align-items-center flex-wrap gap-0">
+
+                {% if commit_id and commit_id != "N/A" %}
+                <div class="build-info-block">
+                    <div class="build-info-label">Commit</div>
+                    <div class="build-info-value">
+                        <code style="font-size:0.88rem">{{ commit_id[:12] if commit_id|length > 12 else commit_id }}</code>
+                    </div>
+                </div>
+
+                <div class="build-info-block">
+                    <div class="build-info-label">Build Time</div>
+                    <div class="build-info-value">
+                        {% if build_timestamp %}
+                        {{ build_timestamp.strftime('%d %b %Y, %H:%M') }}
+                        {% else %}
+                        <span class="text-muted">N/A</span>
+                        {% endif %}
+                    </div>
+                </div>
+                {% endif %}
+
+                {% if svc_status %}
+                {% set is_serving = svc_status.health_status | upper == 'HEALTHY' or (svc_status.health_status | upper == 'UNHEALTHY' and svc_status.running_count and svc_status.running_count >= 1) %}
+                <div class="build-info-block">
+                    <div class="build-info-label">Live Status</div>
+                    <div class="build-info-value">
+                        {% if svc_status.status == 'active' and is_serving %}
+                        <span class="svc-dot svc-dot-healthy"></span><span class="text-success fw-semibold">{{ svc_status.health_status | upper }}</span>
+                        {% elif svc_status.status == 'active' and svc_status.health_status %}
+                        <span class="svc-dot svc-dot-unhealthy"></span><span class="text-danger fw-semibold">{{ svc_status.health_status | upper }}</span>
+                        {% elif svc_status.status == 'active' %}
+                        <span class="svc-dot svc-dot-grey"></span><span class="text-muted">Active</span>
+                        {% else %}
+                        <span class="svc-dot svc-dot-grey"></span><span class="text-muted">No tracking data</span>
+                        {% endif %}
+                        <div style="font-size:0.7rem; color:#adb5bd; margin-top:1px; display:flex; align-items:center; gap:6px;">
+                            {% if svc_status.captured_at %}as of {{ svc_status.captured_at.strftime('%H:%M, %d %b') }}{% endif %}
+                            <form method="POST" action="/actionable/v3/status/refresh?repository_id={{ repository.id }}&env={{ selected_env }}" style="margin:0">
+                                <button type="submit" style="background:none;border:none;padding:0;color:#adb5bd;cursor:pointer;font-size:0.7rem;" title="Refresh live status">↻</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+
+                {% if not is_serving and svc_status.last_healthy_at %}
+                <div class="build-info-block">
+                    <div class="build-info-label">Last Healthy</div>
+                    <div class="build-info-value text-warning">
+                        {{ svc_status.last_healthy_at.strftime('%Y-%m-%d %H:%M') }}
+                    </div>
+                </div>
+                {% endif %}
+
+                {% if svc_status.running_count is not none and svc_status.desired_count is not none %}
+                <div class="build-info-block">
+                    <div class="build-info-label">Tasks</div>
+                    <div class="build-info-value {{ 'text-warning' if svc_status.running_count < svc_status.desired_count else '' }}">
+                        {{ svc_status.running_count }}/{{ svc_status.desired_count }}
+                    </div>
+                </div>
+                {% endif %}
+                {% else %}
+                <div class="build-info-block">
+                    <div class="build-info-label">Live Status</div>
+                    <div class="build-info-value">
+                        <span class="svc-dot svc-dot-grey"></span><span class="text-muted">Not fetched</span>
+                        <div style="font-size:0.7rem; margin-top:1px;">
+                            <form method="POST" action="/actionable/v3/status/refresh?repository_id={{ repository.id }}&env={{ selected_env }}" style="margin:0">
+                                <button type="submit" style="background:none;border:none;padding:0;color:#0d6efd;cursor:pointer;font-size:0.7rem;">Fetch now</button>
+                            </form>
+                        </div>
+                    </div>
+                </div>
+                {% endif %}
+
+                {% if jenkins_url and jenkins_url != "N/A" %}
+                <div class="ms-auto">
+                    <a href="{{ jenkins_url }}" target="_blank" class="btn btn-sm btn-outline-primary">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="me-1">
                             <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/>
                             <polyline points="15,3 21,3 21,9"/>
                             <line x1="10" y1="14" x2="21" y2="3"/>
                         </svg>
-                        View Build on Jenkins
+                        Jenkins
                     </a>
-                    {% endif %}
                 </div>
-                <div class="text-end">
-                    <small class="text-muted">
-                        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" class="me-1">
-                            <circle cx="12" cy="12" r="10"/>
-                            <polyline points="12,6 12,12 16,14"/>
-                        </svg>
-                        {% if build_timestamp %}
-                        Build time: {{ build_timestamp.strftime('%Y-%m-%d %H:%M:%S') }}
-                        {% else %}
-                        Build time: N/A
-                        {% endif %}
-                    </small>
-                </div>
+                {% endif %}
+
             </div>
         </div>
         {% endif %}

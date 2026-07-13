@@ -1,4 +1,4 @@
-import re
+from datetime import datetime, timezone
 
 from flask import Blueprint
 from flask import jsonify
@@ -24,7 +24,12 @@ from libinv.models import Actionable
 from libinv.models import ActionablePackageAvailableVersion
 from libinv.models import Repository
 from libinv.models import Repository_ActionablePackageAvailableVersion
+from libinv.models import ServiceStatus
+from libinv.models import Wasp
 from libinv.scio_models import DiscoveredPackage
+from libinv.scio_models import VulnerablePath
+from libinv.cli.sync_service_status import _upsert
+from libinv.scripts.deployment_status import fetch_service_status
 
 actionable = Blueprint("actionable", __name__, template_folder="templates")
 
@@ -216,6 +221,13 @@ def actionables_v3():
 
     include_epss = any(result.get("epss_score") is not None for result in results)
 
+    with Session() as session:
+        svc_status = (
+            session.query(ServiceStatus)
+            .filter_by(repository_id=repository_id, environment=environment)
+            .first()
+        )
+
     if format == "json":
         return jsonify(
             {
@@ -235,6 +247,7 @@ def actionables_v3():
         jenkins_url=jenkins_url,
         build_timestamp=build_timestamp,
         include_epss=include_epss,
+        svc_status=svc_status,
     )
 
 
@@ -245,6 +258,7 @@ def package_details():
     """
     package_url = request.args.get("package_url")
     version = request.args.get("version")
+    fmt = request.args.get("format", "html")
 
     if not package_url or not version:
         return jsonify({"error": "package_url and version parameters required"}), 400
@@ -470,6 +484,20 @@ def package_details():
             "low_cves": low_count,
         }
 
+    if fmt == "json":
+        # Serialize date fields before returning
+        for cve in cve_details:
+            cve["epss_date"] = str(cve["epss_date"]) if cve["epss_date"] else None
+            cve["updated_at"] = str(cve["updated_at"]) if cve["updated_at"] else None
+        return jsonify(
+            {
+                "package_info": package_info,
+                "cve_details": cve_details,
+                "package_stats": package_stats,
+                "repositories_using_package": repositories_using_package,
+            }
+        )
+
     return render_template(
         "package_details.html",
         package_info=package_info,
@@ -492,6 +520,8 @@ def repositories_listing():
     search_query = request.args.get("search", "")
     has_vulnerabilities = request.args.get("has_vulnerabilities", "")
     priority_filter = request.args.get("priority", "")
+    live_status_filter = request.args.get("live_status", "")
+    format = request.args.get("format", "")
 
     with Session() as session:
         # Base query for repository statistics
@@ -720,7 +750,76 @@ def repositories_listing():
             "search": search_query,
             "has_vulnerabilities": has_vulnerabilities,
             "priority": priority_filter,
+            "live_status": live_status_filter,
         }
+
+    # Batch-fetch service statuses for all repos in the result set
+    repo_ids = [r["id"] for r in repositories_list]
+    with Session() as session:
+        svc_rows = (
+            session.query(ServiceStatus)
+            .filter(ServiceStatus.repository_id.in_(repo_ids))
+            .all()
+        )
+    status_map = {(s.repository_id, s.environment): s for s in svc_rows}
+
+    if live_status_filter == "active":
+        repositories_list = [
+            r for r in repositories_list
+            if any(
+                status_map.get((r["id"], env)) and
+                status_map[(r["id"], env)].status == "active"
+                for env in r["environments"]
+            )
+        ]
+    elif live_status_filter == "no_tasks":
+        repositories_list = [
+            r for r in repositories_list
+            if any(
+                status_map.get((r["id"], env)) and
+                status_map[(r["id"], env)].status == "active" and
+                (status_map[(r["id"], env)].running_count or 0) == 0
+                for env in r["environments"]
+            )
+        ]
+    elif live_status_filter == "no_data":
+        repositories_list = [
+            r for r in repositories_list
+            if not any(
+                status_map.get((r["id"], env)) and
+                status_map[(r["id"], env)].status == "active"
+                for env in r["environments"]
+            )
+        ]
+
+    if format == "json":
+        def _svc_dict(s):
+            if not s:
+                return None
+            return {
+                "status": s.status,
+                "health_status": s.health_status,
+                "running_count": s.running_count,
+                "desired_count": s.desired_count,
+                "last_healthy_at": s.last_healthy_at.isoformat() if s.last_healthy_at else None,
+                "captured_at": s.captured_at.isoformat() if s.captured_at else None,
+            }
+
+        enriched = []
+        for repo in repositories_list:
+            r = dict(repo)
+            r["live_status"] = {
+                env: _svc_dict(status_map.get((repo["id"], env)))
+                for env in repo["environments"]
+            }
+            enriched.append(r)
+
+        return jsonify({
+            "repositories": enriched,
+            "summary_stats": summary_stats,
+            "filter_options": filter_options,
+            "current_filters": current_filters,
+        })
 
     return render_template(
         "repositories_listing.html",
@@ -728,6 +827,7 @@ def repositories_listing():
         summary_stats=summary_stats,
         filter_options=filter_options,
         current_filters=current_filters,
+        status_map=status_map,
         no_filters=(
             environment_filter == ""
             and pod_filter == ""
@@ -735,8 +835,44 @@ def repositories_listing():
             and search_query == ""
             and has_vulnerabilities == ""
             and priority_filter == ""
+            and live_status_filter == ""
         ),
     )
+
+
+@actionable.route("/v3/status/refresh", methods=["POST"])
+def refresh_service_status():
+    repository_id = request.args.get("repository_id")
+    environment = request.args.get("env")
+
+    if not repository_id or not environment:
+        return jsonify({"error": "repository_id and env are required"}), 400
+
+    try:
+        repository_id_int = int(repository_id)
+    except ValueError:
+        return jsonify({"error": "repository_id must be an integer"}), 400
+
+    repo = fetch_repository(repository_id_int)
+    if not repo:
+        return jsonify({"error": "repository not found"}), 404
+
+    with Session() as session:
+        valid_envs = {
+            row[0] for row in session.query(Wasp.environment)
+            .filter(Wasp.repository_id == repository_id_int)
+            .distinct()
+        }
+    if environment not in valid_envs:
+        return jsonify({"error": "invalid environment"}), 400
+
+    normalized = fetch_service_status(repo.name, environment)
+    normalized["repository_id"] = repository_id_int
+    normalized["captured_at"] = datetime.now(tz=timezone.utc)
+
+    _upsert([normalized])
+
+    return redirect(f"/actionable/v3/?repository_id={repository_id_int}&env={environment}")
 
 
 @actionable.route("/v3/statistics", methods=["GET"])
@@ -1144,12 +1280,13 @@ def statistics_dashboard():
 @actionable.route("/v3/package_scan", methods=["GET"])
 def safe_upgrades():
     actionable_id = request.args.get("actionable_id")
-    version_in_use = request.args.get("version_in_use")
+    version_in_use = request.args.get("version_in_use") or None
     repository_id = request.args.get("repository_id")
     env = request.args.get("env", "prod")
+    fmt = request.args.get("format", "html")
 
-    if not actionable_id or not version_in_use:
-        return jsonify({"error": "actionable_id or version_in_use parameter missing"}), 500
+    if not actionable_id:
+        return jsonify({"error": "actionable_id parameter missing"}), 400
 
     results = []
     with Session() as session:
@@ -1167,7 +1304,7 @@ def safe_upgrades():
                     "epss_score": version.epss_score,
                     "vulnerabilitiy_severities": version.vulnerabilitiy_severities_epss,
                     "is_latest": version.is_latest,
-                    "updated_at": version.updated_at,
+                    "updated_at": str(version.updated_at) if version.updated_at else None,
                 }
             )
         if available_versions:
@@ -1180,6 +1317,17 @@ def safe_upgrades():
                 return jsonify({"error": "Actionable package not found"}), 404
 
     results = sorted(results, key=lambda v: MavenVersion(v["version"]), reverse=True)
+
+    if fmt == "json":
+        return jsonify(
+            {
+                "package_url": package_url,
+                "actionable_id": actionable_id,
+                "version_in_use": version_in_use,
+                "results": results,
+            }
+        )
+
     return render_template(
         "package_scan.html",
         results=results,
