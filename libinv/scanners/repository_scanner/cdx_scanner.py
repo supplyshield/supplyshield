@@ -1,12 +1,16 @@
 import logging
 import os
 import re
+import time
 from pathlib import Path
 
 from libinv.env import BASE_IMAGE_JAVA_VERSION_MAPPING
 from libinv.env import CDXGEN_BIN
+from libinv.env import FETCH_LICENSE
 from libinv.env import GO_PRIVATE
 from libinv.env import JAVA_HOME
+from libinv.env import GONOSUMCHECK
+from libinv.env import GONOSUMDB
 from libinv.env import NPM_CONFIG_PREFIX
 from libinv.helpers import SubprocessError
 from libinv.helpers import subprocess_run
@@ -73,6 +77,20 @@ def get_java_version_by_base_image(base_image: str):
     return version
 
 
+def detect_java_version_from_subdir_gradle(repo_dir: Path):
+    pattern = re.compile(r"sourceCompatibility\s*=\s*['\"]?(\d+)['\"]?")
+    versions = []
+    for gradle_file in repo_dir.rglob("build.gradle"):
+        try:
+            for line in gradle_file.read_text(errors="ignore").splitlines():
+                match = pattern.search(line)
+                if match:
+                    versions.append(int(match.group(1)))
+        except OSError:
+            continue
+    return str(max(versions)) if versions else None
+
+
 def get_java_env(base_image, repo_dir):
     java_version = None
     if base_image:
@@ -81,15 +99,25 @@ def get_java_env(base_image, repo_dir):
     if not java_version:
         java_version = get_java_version_from_gradle(repo_dir)
 
-    if java_version:
-        java_env = {
-            "JAVA_HOME": JAVA_HOME[java_version],
-            "PATH": f"{os.environ['PATH']}:{JAVA_HOME[java_version]}/bin",
-        }
-        logger.info(f"Detected java: {java_version}")
-        return java_env
+    if not java_version:
+        java_version = detect_java_version_from_subdir_gradle(repo_dir)
+        if java_version:
+            logger.info(f"Detected java version {java_version} from subdir build.gradle files")
 
-    return {}
+    if not java_version:
+        java_version = "21"
+        logger.warning(f"Could not detect java version, defaulting to {java_version}")
+
+    java_path = JAVA_HOME.get(java_version)
+    if not java_path:
+        logger.warning(f"No JAVA_HOME configured for version {java_version}, skipping java env")
+        return {}
+
+    logger.info(f"Detected java: {java_version}")
+    return {
+        "JAVA_HOME": java_path,
+        "PATH": f"/usr/local/go/bin:{os.environ.get('PATH', '')}:{java_path}/bin",
+    }
 
 
 def get_go_env(base_image, repo_dir):
@@ -103,16 +131,28 @@ def get_go_env(base_image, repo_dir):
 def get_env(repo_dir):
     base_image = None
     env = {
-        "PATH": os.environ["PATH"],
+        "PATH": f"/usr/local/go/bin:{os.environ.get('PATH', '')}",
         "HOME": os.environ["HOME"],
-        # "GOPATH": os.environ["GOPATH"], FIXME: it might altually be requried
-        "GOPRIVATE": GO_PRIVATE,
+        "GOPATH": os.environ.get("GOPATH", f"{os.environ['HOME']}/go"),
+        "GOPRIVATE": GO_PRIVATE or "",
+        "GOFLAGS": "-mod=mod",
         "CDXGEN_DEBUG_MODE": "debug",
+        "FETCH_LICENSE": FETCH_LICENSE,
+        "GONOSUMCHECK": GONOSUMCHECK or "",
+        "GONOSUMDB": GONOSUMDB or "",
         "NPM_CONFIG_PREFIX": NPM_CONFIG_PREFIX,
         "CDXGEN_PLUGINS_DIR": NPM_CONFIG_PREFIX + "/@cyclonedx/cdxgen-plugins-bin/plugins/",
         "PIP_CONFIG_FILE": str(repo_dir / "pip.conf"),
         "MVN_CMD": "/root/.sdkman/candidates/maven/3.9.8/bin/mvn",
     }
+    logger.info(f"Detected go: {env['GOPATH']}")
+    logger.info(f"Go env: GOPRIVATE={GO_PRIVATE!r} GONOSUMDB={GONOSUMDB!r} GONOSUMCHECK={GONOSUMCHECK!r} GOFLAGS=-mod=mod")
+
+    netrc = Path(os.environ.get("HOME", "/root")) / ".netrc"
+    if netrc.exists():
+        logger.info(f"~/.netrc present ({netrc.stat().st_size} bytes)")
+    else:
+        logger.warning("~/.netrc NOT found — private Go modules will fail auth")
 
     try:
         base_image = get_base_image(repo_dir / "Dockerfile")
@@ -195,10 +235,17 @@ class CdxScanner:
             *self.purls_to_exclude,
         ]
 
+        logger.debug(f"{repo_dir.name}: running cdxgen command: {' '.join(str(c) for c in command)}")
+        t0 = time.time()
         run = subprocess_run(
             command,
             env=self.env,
         )
+        elapsed = time.time() - t0
+        logger.info(f"{repo_dir.name}: cdxgen finished in {elapsed:.1f}s")
+        if run.stdout:
+            for line in run.stdout.splitlines()[:200]:
+                logger.debug(f"[cdxgen stdout] {line}")
         if run.stderr:
             with open("errors", "a") as f:
                 f.write(f"{self.repo_dir} \n")
